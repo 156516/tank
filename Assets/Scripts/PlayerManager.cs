@@ -23,6 +23,9 @@ public class PlayerManager : MonoBehaviour
     public GameObject player1Born;
     public GameObject player2Born;
 
+    // 玩家 2 的实际预制体(Player 2.prefab),用于重生时把它注入到 Born 实例上
+    public GameObject player2Prefab;
+
     // UI 引用
     public Text playerScoreText1;
     public Text playerScoreText2;
@@ -133,6 +136,7 @@ public class PlayerManager : MonoBehaviour
                 {
                     b.createPlayer = true;
                     b.playerNumber = 2;
+                    b.player2Prefab = player2Prefab;
                 }
             }
             isDead2 = false;

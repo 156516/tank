@@ -126,7 +126,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   playerPrefab: {fileID: 3932541018496167799, guid: 098d13d8d1cd19f43a3d23c9ad61f446, type: 3}
+  player2Prefab: {fileID: 3932541018496167799, guid: 08433f4e6be3b6b4fa36a664023e5898, type: 3}
   enemyPrefablist:
   - {fileID: 6531719087120305755, guid: a56994b001da65e4088065aa258ddce2, type: 3}
   - {fileID: 6531719087120305755, guid: 634a559576ad9a64fa1df5151503f781, type: 3}
   createPlayer: 0
+  playerNumber: 1

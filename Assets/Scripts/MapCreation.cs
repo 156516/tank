@@ -9,8 +9,9 @@ public class MapCreation : MonoBehaviour
     // 0.玩家基地 1.墙 2.障碍物 3.出生效果 4.河流/道具 5.草 6.边界墙
     public GameObject[] item;
 
-    // Player 2 出生点模板(Born Prefab),在 Inspector 中拖入 Born 2.prefab
-    public GameObject player2BornPrefab;
+    // Player 2 的预制体(直接是 Player 2.prefab),复用同一份 Born.prefab 模板即可,
+    // 双人模式下把这里拖入的 prefab 注入到 player2 的 Born.player2Prefab 字段上。
+    public GameObject player2Prefab;
 
     // true = 双人模式(同时生成 player1 / player2 出生点);false = 单人
     public bool twoPlayerMode = true;
@@ -50,15 +51,16 @@ public class MapCreation : MonoBehaviour
         Born player1Born = go.GetComponent<Born>();
         player1Born.createPlayer = true;
         player1Born.playerNumber = 1;
-        // 初始化玩家 2(双人模式)
-        if (twoPlayerMode && player2BornPrefab != null)
+        // 初始化玩家 2(双人模式):复用同一个 item[3] Born.prefab 模板,通过 player2Prefab 字段注入
+        if (twoPlayerMode && player2Prefab != null)
         {
-            GameObject go2 = Instantiate(player2BornPrefab, new Vector3(2, -8, 0), Quaternion.identity);
+            GameObject go2 = Instantiate(item[3], new Vector3(2, -8, 0), Quaternion.identity);
             Born player2Born = go2.GetComponent<Born>();
             if (player2Born != null)
             {
                 player2Born.createPlayer = true;
                 player2Born.playerNumber = 2;
+                player2Born.player2Prefab = player2Prefab;
             }
         }
 

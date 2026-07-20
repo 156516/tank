@@ -164,7 +164,7 @@ tank/
    - `Sprite Renderer` → `Sprite` 字段:从 `Assets/GameResource/Graphics/Player2.bmp` 中选第一帧
    - `Player` 组件 → `Tank Sprite [4]`:依次拖入 Player2.bmp 的 0、8、16、24 帧(对应上、右、下、左四个方向)
 
-> 单人模式可跳过本步骤。
+> 单人模式可跳过本步骤。**无需另建 Born 2.prefab**:Born.prefab 上已经存在 `playerPrefab` 与 `player2Prefab` 两个字段,MapCreation 与 PlayerManager 会直接复用原 Born.prefab,运行时把 `player2Prefab` 注入。
 
 ### 4. 配置场景组件
 
@@ -172,11 +172,14 @@ tank/
 
 - `MapCreation` 组件:
   - `Two Player Mode`:勾选(双人)/ 不勾选(单人)
-  - `Player 2 Born Prefab`:双人模式拖入 `Player 2.prefab` 作为出生点模板(Born Pre-fab 类型)
+  - `Player 2 Prefab`:双人模式下拖入 `Player 2.prefab`(脚本会在 (2, -8) 孵化时把它注入到 Born 实例的 `player2Prefab` 字段)
 
 - `PlayerManager` 组件(可选 UI):
-  - 拖入两组 `Player Score Text` / `Player Life Value Text`(P1 / P2)以及 `Is Defeat UI`
-  - 双人模式下 `Player 1 Born` / `Player 2 Born` 拖入对应的 Born 预制体
+  - `Player 1 Born`:拖入 `Born.prefab`
+  - `Player 2 Born`:拖入 `Born.prefab`(同一份,脚本会再注入 `player2Prefab`)
+  - `Player 2 Prefab`:双人模式下拖入 `Player 2.prefab`(供重生用)
+  - 4 个 Text(可选):`Player Score Text 1/2` + `Player Life Value Text 1/2`
+  - `Is Defeat UI`
 
 ### 5. 运行
 
@@ -197,9 +200,9 @@ tank/
 | `Player.cs` | 玩家坦克移动、转向、射击、无敌时间控制;键位可配置:`moveKeys[4]` + `fireKey`,由 `Born.ApplyKeyMap` 根据玩家编号注入 |
 | `Enemy.cs` | 敌方 AI 坦克随机移动、定时射击、坦克间碰撞避让;击杀时记入对应玩家分数(`killerPlayerNumber`) |
 | `Bullet.cs` | 子弹飞行、碰撞判定(对敌人 / 玩家 / 墙体 / Heart 的差异化处理);携带 `shootingPlayerNumber` 用于正确记分 |
-| `MapCreation.cs` | 启动时一次性随机生成地图;周期性在三个刷新点孵化敌人;若 `twoPlayerMode=true` 同时在 `(-2,-8)` 与 `(2,-8)` 摆放两位玩家的 Born |
-| `PlayerManager.cs` | 单例管理器:分别管理两位玩家的生命与分数、独立重生与失败判定(双方都无命或基地被毁才判负) |
-| `Born.cs` | 出生点:1 秒后孵化坦克后销毁自身;`ApplyKeyMap` 根据 `playerNumber` 注入 WASD+Space / 方向键+Enter |
+| `MapCreation.cs` | 启动时一次性随机生成地图;周期性在三个刷新点孵化敌人;若 `twoPlayerMode=true` 复用 `item[3]` Born 模板在 `(-2,-8)` 与 `(2,-8)` 摆放两位玩家的出生点,运行时把 `player2Prefab` 字段注入 |
+| `PlayerManager.cs` | 单例管理器:分别管理两位玩家的生命与分数、独立重生与失败判定(双方都无命或基地被毁才判负);Player 2 重生时也会向 Born 实例注入 `player2Prefab` |
+| `Born.cs` | 出生点:1 秒后孵化坦克后销毁自身;已有 `playerPrefab` 与 `player2Prefab` 两个字段,`ApplyKeyMap` 根据 `playerNumber` 注入 WASD+Space / 方向键+Enter,playerNumber=2 时优先使用 `player2Prefab` |
 | `Heart.cs` | 基地逻辑:被击中即切换破碎贴图,调用 `PlayerManager.TriggerDefeat()` 进入失败 |
 | `Barrier.cs` | 障碍物被击中时播放音效 |
 | `Explosion.cs` | 爆炸特效,0.167 秒后自动销毁 |
@@ -231,7 +234,7 @@ if (h != 0 && v != 0)
 
 **子弹差异化碰撞**(`Bullet.cs`):玩家子弹只对敌人 / Heart / 可破坏墙生效;敌方子弹只对玩家生效。玩家子弹击中敌人前会写入 `enemy.killerPlayerNumber = shootingPlayerNumber`,这样击杀分记到正确的玩家身上。
 
-**敌人刷新**(`MapCreation.cs`):每 5 秒在顶部三处随机位置刷新一只敌人(`InvokeRepeating("CreateEnemy", 4, 5)`);双人模式下额外调用 `player2BornPrefab` 在 `(2, -8)` 摆放 Player 2 的出生点。
+**敌人刷新**(`MapCreation.cs`):每 5 秒在顶部三处随机位置刷新一只敌人(`InvokeRepeating("CreateEnemy", 4, 5)`);双人模式下复用同一份 Born.prefab 在 `(2, -8)` 摆放 Player 2 的出生点,并把 `player2Prefab` 注入到该 Born 实例上。
 
 **双人模式下失败判定**(`PlayerManager.cs`):任一玩家还有命时,另一方无命不会立刻结束游戏;只有当 *双方都无命* 或基地被毁时,才弹出失败 UI 并延迟 3 秒返回主菜单。
 

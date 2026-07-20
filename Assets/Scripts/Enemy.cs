@@ -58,6 +58,7 @@ public class Enemy : MonoBehaviour
     private int pathIndex;                   // 当前正前往 pathPoints 中的第几个格子
     private float nextPathPlanTime;          // 下一次重算路径的绝对时间
     private float arrivalThreshold = 0.25f;  // 进入"到达当前格点"的距离阈值
+    private bool lastPathUsedBreakable;      // 最近规划的路径是否依赖破砖墙
 
     // ——时间窗口 ban——
     // 记录本 enemy 最近走过的格子,PlanPath 时把这一段 ban 掉,避免来回跳头
@@ -113,18 +114,17 @@ public class Enemy : MonoBehaviour
 
     void Update()
     {
-        // 攻击冷却 + 仅在前方有可碎砖墙时才开火
-        // 铁墙 / 河流 / 边界空气墙 不可碎,子弹打上去只会消失,毫无意义
+        // 攻击冷却 + 仅在前方是可碎砖墙 **且当前 path 依赖破墙** 时才开火
+        // 走空地的路径时不应主动破墙(走「绕路优先」设定)
         fireTimer += Time.deltaTime;
         if (fireTimer >= fireCooldown)
         {
-            if (IsBreakableWallInFront())
+            if (IsBreakableWallInFront() && lastPathUsedBreakable)
             {
                 AttackMethod();
                 fireTimer = 0f;
             }
-            // 没的可碎墙时:不重置 fireTimer,下次到点再看,
-            // 避免被铁墙堵住时一直空开炮(浪费时间)
+            // 否则不浪费子弹
         }
 
         // 每 2 秒同步一次难度,等级变化时升级自身属性
@@ -356,6 +356,12 @@ public class Enemy : MonoBehaviour
         {
             needReplan = true;
         }
+        // 前方是砖墙:**且当前 path 必须破墙**(走空地那条路不该撞上 brick),触发重新规划;
+        // 重新规划会优先尝试不开墙路径,这是「走空地优先」的体现
+        if (front == BlockType.BreakableWall && lastPathUsedBreakable)
+        {
+            needReplan = true;
+        }
 
         if (needReplan)
         {
@@ -363,11 +369,16 @@ public class Enemy : MonoBehaviour
             // 重算间隔受难度缩放影响:高等级更频繁重算
             nextPathPlanTime = Time.time + Random.Range(0.8f, 1.6f) / PlayerManager.Instance.GetDifficultyMultiplier();
         }
-        else if (front == BlockType.BreakableWall)
+        else if (front == BlockType.BreakableWall && !lastPathUsedBreakable)
         {
-            // 可碎砖墙:开炮打穿,不重算路径
-            if (fireTimer >= fireCooldown * 0.6f) AttackMethod();
+            // 规划给的是绕路,但实际撞到 brick 了 — 说明这条规划被墙封锁,
+            // 强制下一次 PlanPath 走 FindPathPreferOpen(会自动 fallback 到破墙路径)
+            needReplan = true;
+            pathPoints = null;
+            PlanPath();
         }
+        // 实际上 lastPathUsedBreakable=true 时,这条路径本来就是破砖路径,继续开火
+        // 不要再多此一举。但 MoveMethod 中「破砖开火」由 Update 调度,不在这写
         // Grass / 开放空间:按当前 (h, v) 直接走
 
         // ——axis-aligned 防御——
@@ -403,8 +414,11 @@ public class Enemy : MonoBehaviour
 
         Vector2Int start = MapGrid.WorldToCell(transform.position);
         Vector2Int end = MapGrid.WorldToCell(currentTarget.position);
-        // allowBreakable=true:遇到砖墙也按"可走"对待(打碎就过)
-        pathPoints = MapGrid.FindPath(start, end, allowBreakable: true, banned);
+
+        // 「优先走空地」:FindPathPreferOpen 先找不开墙的路径,失败再找允许破墙的
+        bool usedBreak;
+        pathPoints = MapGrid.FindPathPreferOpen(start, end, banned, out usedBreak);
+        lastPathUsedBreakable = usedBreak;
         pathIndex = 0;
 
         if (pathPoints != null && pathPoints.Count > 0)

@@ -160,4 +160,28 @@ public static class MapGrid
         if (banned != null && banned.Contains(cell)) return false;
         return true;
     }
+
+    // 「优先走空地」路径规划:先尝试不开砖墙的路径,失败再尝试允许破砖墙。
+    // out usedBreakable 表示最终路径是否依赖破砖(让 Enemy 知道是否主动开火)
+    public static List<Vector2Int> FindPathPreferOpen(Vector2Int start, Vector2Int end,
+                                                     HashSet<Vector2Int> banned,
+                                                     out bool usedBreakable)
+    {
+        // 第一轮:走空地优先(砖墙当阻挡)
+        List<Vector2Int> path = FindPath(start, end, allowBreakable: false, banned);
+        if (path != null)
+        {
+            usedBreakable = false;
+            return path;
+        }
+        // 第二轮:允许破砖墙(实在绕不开时)
+        path = FindPath(start, end, allowBreakable: true, banned);
+        if (path != null)
+        {
+            usedBreakable = true;
+            return path;
+        }
+        usedBreakable = false;
+        return null;
+    }
 }

@@ -24,6 +24,9 @@ public class Enemy : MonoBehaviour
     public float chaseProbability = 0.78f;  // 换方向时朝目标的概率
     public float detectRange = 1.0f;        // 前方射线长度
 
+    // HeartChaser「绕心刺人」:路上遇到玩家,临时切去打这个玩家
+    public float opportunisticRadius = 3.0f;
+
     // ——AI 协调策略——
     [Header("AI Role Distribution")]
     [Tooltip("出生时 roll < heartChaserChance -> 一心冲 Heart")]
@@ -43,6 +46,8 @@ public class Enemy : MonoBehaviour
 
     // 当前目标
     private Transform currentTarget;
+    // HeartChaser 临时切去打玩家的「机会目标」,打掉 / 离开范围后清除
+    private Transform opportunisticKill;
 
     private void Awake()
     {
@@ -88,6 +93,12 @@ public class Enemy : MonoBehaviour
             fireTimer = 0f;
         }
 
+        // HeartChaser 机会目标:路上有玩家 → 临时切换去打
+        if (role == EnemyRole.HeartChaser)
+        {
+            UpdateOpportunisticTarget();
+        }
+
         // 周期性地重新选目标
         retargetTimer += Time.deltaTime;
         if (retargetTimer >= 0.5f || currentTarget == null)
@@ -95,6 +106,50 @@ public class Enemy : MonoBehaviour
             Retarget();
             retargetTimer = 0f;
         }
+
+        // 决定这一帧真正用的目标
+        currentTarget = opportunisticKill != null ? opportunisticKill : currentTarget;
+
+        // 防御:目标 GameObject 可能在这一帧被 Destroy(玩家阵亡),清掉野指针
+        if (currentTarget == null ||
+            (currentTarget.gameObject != null && !currentTarget.gameObject.activeInHierarchy))
+        {
+            currentTarget = null;
+        }
+    }
+
+    // HeartChaser 的"绕心刺人"逻辑:
+    // - 如果 opportunistic 还在 / 在范围内,继续追它
+    // - 否则看周围有没有玩家,有就锁定
+    // - 直到玩家死亡 / 离开范围,才回到 Heart
+    private void UpdateOpportunisticTarget()
+    {
+        if (opportunisticKill != null)
+        {
+            // 失去了(被子弹击中或距离过远),清掉,回到冲 Heart
+            if (!opportunisticKill.gameObject.activeInHierarchy ||
+                Vector3.Distance(transform.position, opportunisticKill.position) > opportunisticRadius * 1.5f)
+            {
+                opportunisticKill = null;
+            }
+            return;
+        }
+        // 当前没有临时目标 → 在周围扫描一个玩家
+        GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
+        float bestDist = opportunisticRadius * opportunisticRadius; // 用平方比较
+        Transform best = null;
+        foreach (GameObject t in tanks)
+        {
+            if (t == null || !t.activeInHierarchy) continue;
+            if (t.GetComponent<Player>() == null) continue;
+            float d = (t.transform.position - transform.position).sqrMagnitude;
+            if (d < bestDist)
+            {
+                bestDist = d;
+                best = t.transform;
+            }
+        }
+        opportunisticKill = best;
     }
 
     private void FixedUpdate()

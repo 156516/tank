@@ -76,39 +76,19 @@ public class Enemy : MonoBehaviour
         Instantiate(bulletPrefab, transform.position, Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
     }
 
-    // 优先级:Heart(基地) > 最近玩家。
-    // 因为撞掉基地 = 立刻结束游戏,所以敌人会优先尝试打基地;
-    // 只有当基地已经被毁,才把火力转向玩家。
+    // 目标 = Heart(基地)。撞掉基地直接结束游戏,所以 AI 一心打基地。
+    // Heart 被毁后游戏已失败,敌人不再继续追玩家。
     private void Retarget()
     {
         GameObject heart = GameObject.FindGameObjectWithTag("Heart");
         if (heart != null && heart.activeInHierarchy)
         {
             targetTank = heart.transform;
-            return;
         }
-        targetTank = FindClosestPlayer();
-    }
-
-    // 找最近的、活着的玩家坦克
-    private Transform FindClosestPlayer()
-    {
-        GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
-        float bestDist = float.MaxValue;
-        Transform best = null;
-        foreach (GameObject t in tanks)
+        else
         {
-            if (t == null || !t.activeInHierarchy) continue;
-            // 只追 Player(Enemy 也是 Tank tag,但没有 Player 组件)
-            if (t.GetComponent<Player>() == null) continue;
-            float d = (t.transform.position - transform.position).sqrMagnitude;
-            if (d < bestDist)
-            {
-                bestDist = d;
-                best = t.transform;
-            }
+            targetTank = null;
         }
-        return best;
     }
 
     // 主移动:到时刻就重新选方向,根据检测到的障碍立刻转向

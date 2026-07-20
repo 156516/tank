@@ -17,6 +17,10 @@ public class Enemy : MonoBehaviour
     private float nextChangeTime;     // 距离下一次强制改变方向的绝对时间(Time.time)
     private float retargetTimer;      // 多久重新选一次目标
 
+    // 上一次同步等级的时间(用于运行时升级)
+    private float lastAppliedLevel = -1;
+    private float syncTimer;
+
     // AI 调参
     public float fireCooldown = 1.5f;
     public float changeDirMin = 1.5f;
@@ -49,6 +53,12 @@ public class Enemy : MonoBehaviour
     // HeartChaser 临时切去打玩家的「机会目标」,打掉 / 离开范围后清除
     private Transform opportunisticKill;
 
+    // 保存 Inspector 中原始参数,作为难度缩放的基准
+    private float baseMoveSpeed;
+    private float baseFireCooldown;
+    private float baseChaseProbability;
+    private float baseOpportunisticRadius;
+
     private void Awake()
     {
         sr = GetComponent<SpriteRenderer>();
@@ -58,6 +68,13 @@ public class Enemy : MonoBehaviour
         fireTimer = Random.Range(0f, fireCooldown);
         // 决定本 enemy 一生扮演的角色(不会再变)
         AssignRole();
+        // 把 Inspector 默认值记录下来,后续用作难度缩放基准
+        baseMoveSpeed = moveSpeed;
+        baseFireCooldown = fireCooldown;
+        baseChaseProbability = chaseProbability;
+        baseOpportunisticRadius = opportunisticRadius;
+        // 出生时立即按当前难度同步一次
+        SyncDifficulty();
     }
 
     // 出生时摇一次,决定此后走哪套决策
@@ -91,6 +108,14 @@ public class Enemy : MonoBehaviour
         {
             AttackMethod();
             fireTimer = 0f;
+        }
+
+        // 每 2 秒同步一次难度,等级变化时升级自身属性
+        syncTimer += Time.deltaTime;
+        if (syncTimer >= 2.0f)
+        {
+            SyncDifficulty();
+            syncTimer = 0f;
         }
 
         // HeartChaser 机会目标:路上有玩家 → 临时切换去打
@@ -296,5 +321,26 @@ public class Enemy : MonoBehaviour
             ChooseNewDirection();
             nextChangeTime = Time.time + Random.Range(0.3f, 1.0f);
         }
+    }
+
+    // 把当前 PlayerManager 难度应用到本 enemy 的属性上
+    // mult 范围 [1.0, 2.4];mult=1 时按 Inspector 默认值,mult=2.4 时大幅强化
+    private void SyncDifficulty()
+    {
+        if (PlayerManager.Instance == null) return;
+        int lvl = PlayerManager.Instance.currentLevel;
+        if (lvl == lastAppliedLevel) return;
+        lastAppliedLevel = lvl;
+
+        float mult = PlayerManager.Instance.GetDifficultyMultiplier();
+        // 多属性同步调整
+        // 移动速度:线性放大(注意保留 1P/2P 玩家速度不变;只影响 enemy)
+        // 攻击间隔:变小(fireCooldown / mult,但不低于 0.5s 防止无敌)
+        // 追踪概率:加分母式,趋向 0.95
+        // 机会半径:加大
+        moveSpeed = baseMoveSpeed * Mathf.Lerp(1f, 1.6f, Mathf.InverseLerp(1f, 2.4f, mult));
+        fireCooldown = Mathf.Max(0.5f, baseFireCooldown / Mathf.Lerp(1f, 1.5f, Mathf.InverseLerp(1f, 2.4f, mult)));
+        chaseProbability = Mathf.Clamp(baseChaseProbability + (mult - 1f) * 0.08f, 0.5f, 0.95f);
+        opportunisticRadius = baseOpportunisticRadius * Mathf.Lerp(1f, 1.6f, Mathf.InverseLerp(1f, 2.4f, mult));
     }
 }

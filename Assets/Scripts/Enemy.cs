@@ -457,17 +457,59 @@ public class Enemy : MonoBehaviour
         return tag == "Barrier" || tag == "Heart" || tag == "Wall" || tag == "AirBarrier";
     }
 
-    // 卡死救援:反向 + 重新规划
+    // 卡死救援:扫描 4 个方向,找一个无阻挡的方向走出去
+    // 不再只是清零 + PlanPath — 因为 PlanPath 会基于"嵌入位置的格子"重新算,
+    // 反复把路径指向同堵墙,结果敌人仍静止
     private void EscapeStuck()
     {
-        // 反正先把方向清零避免继续撞墙,PlanPath 会立即重算
-        h = 0f;
-        v = 0f;
+        Vector3 selfPos = transform.position;
+        Vector2Int[] candidates = {
+            new Vector2Int(0, 1),   // 上
+            new Vector2Int(0, -1),  // 下
+            new Vector2Int(1, 0),   // 右
+            new Vector2Int(-1, 0)   // 左
+        };
+
+        // 优先选当前 (h, v) 方向的反方向作为最强候选
+        int reversePriority = 0;
+        if (h > 0) reversePriority = 3;       // h>0(右)→ 优先往左
+        else if (h < 0) reversePriority = 2;  // h<0(左)→ 优先往右
+        else if (v > 0) reversePriority = 1;  // v>0(上)→ 优先往下
+        else if (v < 0) reversePriority = 0;  // v<0(下)→ 优先往上
+
+        bool found = false;
+        // 先试反方向;再试剩下 3 个
+        for (int tryIdx = 0; tryIdx < 4 && !found; tryIdx++)
+        {
+            int idx = (reversePriority + tryIdx) % 4;
+            Vector2Int d = candidates[idx];
+            // 模拟走一步到的新位置
+            Vector3 testPos = selfPos + new Vector3(d.x * 0.6f, d.y * 0.6f, 0);
+            Collider2D col = Physics2D.OverlapPoint(testPos);
+            if (col == null) { found = true; }
+            else if (!IsBlockingTag(col.tag) && col.gameObject.name != "River")
+            {
+                // 撞到的不是墙,可以走
+                found = true;
+            }
+            if (found)
+            {
+                h = d.x;
+                v = d.y;
+            }
+        }
+
+        if (!found)
+        {
+            // 真的四面都堵死,放弃挣扎,清零
+            h = 0f;
+            v = 0f;
+        }
+
         pathPoints = null;
         stuckAgainstWall = false;
         stuckTime = 0f;
-        nextPathPlanTime = Time.time + 0.1f;  // 立刻重算
-        // 立刻跑一次 PlanPath(下一物理帧)
+        nextPathPlanTime = Time.time + 0.1f;
         PlanPath();
     }
 

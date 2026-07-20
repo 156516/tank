@@ -182,5 +182,5 @@ MonoBehaviour:
   - {fileID: 21300016, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
   - {fileID: 21300032, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
   - {fileID: 21300048, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
-  bulletPrefab: {fileID: 7467894289850518987, guid: 82b204d679b436d40866d2b52873ac65, type: 3}
+  bulletPrefab: {fileID: 7467894289850518987, guid: 07784db72aa9077dea8e1a68ae9ea7df, type: 3}
   explosionPrefab: {fileID: 6137299851721532300, guid: 84c25dc7d4c527c4584c0d10b64b26fa, type: 3}

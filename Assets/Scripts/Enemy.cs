@@ -59,6 +59,12 @@ public class Enemy : MonoBehaviour
     private float nextPathPlanTime;          // 下一次重算路径的绝对时间
     private float arrivalThreshold = 0.25f;  // 进入"到达当前格点"的距离阈值
 
+    // ——时间窗口 ban——
+    // 记录本 enemy 最近走过的格子,PlanPath 时把这一段 ban 掉,避免来回跳头
+    private readonly Queue<Vector2Int> recentCells = new Queue<Vector2Int>();
+    private const int RecentMemory = 5;       // 记住最近 5 个格子
+    private Vector2Int lastCell;              // 上一次记录的格子,用于检测"进入新格子"
+
     // 保存 Inspector 中原始参数,作为难度缩放的基准
     private float baseMoveSpeed;
     private float baseFireCooldown;
@@ -314,6 +320,8 @@ public class Enemy : MonoBehaviour
     private void MoveMethod()
     {
         BlockType front = DetectFront();
+        // 进入新格子就记录,后续 PlanPath 把这一段 ban 掉避免来回跳头
+        UpdateRecentCells();
 
         // 当前 path 节点已到达(进入阈值内)?前进到下一个
         if (pathPoints != null && pathIndex < pathPoints.Count)
@@ -415,11 +423,18 @@ public class Enemy : MonoBehaviour
         }
     }
 
-    // 收集附近敌人位置作为本 enemy 暂时拒绝走的格子。
-    // 这样多个 enemy 撞同一目标时,各自 DFS 出不同路径,自然分散。
+    // 收集附近敌人位置 + 自己最近走过的格子作为本 enemy 的 ban 列表
     private HashSet<Vector2Int> CollectNearbyEnemyBans()
     {
         HashSet<Vector2Int> banned = new HashSet<Vector2Int>();
+
+        // (1) 自己最近 5 个格子 ban:避免规划出让自己"原地打转"的路径
+        foreach (var c in recentCells)
+        {
+            banned.Add(c);
+        }
+
+        // (2) 周围 4 格内其他 Enemy 的当前位置 ban:与队友错开
         GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
         Vector3 selfPos = transform.position;
         for (int i = 0; i < enemies.Length; i++)
@@ -427,10 +442,23 @@ public class Enemy : MonoBehaviour
             GameObject e = enemies[i];
             if (e == null || e == this.gameObject) continue;
             float sqr = (e.transform.position - selfPos).sqrMagnitude;
-            if (sqr > 16f) continue;  // 4 格以内才 ban
+            if (sqr > 16f) continue;
             banned.Add(MapGrid.WorldToCell(e.transform.position));
         }
         return banned;
+    }
+
+    // 每帧检查:进入新格子就把它压入 recentCells,超过容量出队
+    private void UpdateRecentCells()
+    {
+        Vector2Int cur = MapGrid.WorldToCell(transform.position);
+        if (cur == lastCell) return;     // 还在同一格,不入队
+        lastCell = cur;
+        recentCells.Enqueue(cur);
+        while (recentCells.Count > RecentMemory)
+        {
+            recentCells.Dequeue();
+        }
     }
 
     // 朝目标格子转方向(axis-aligned)

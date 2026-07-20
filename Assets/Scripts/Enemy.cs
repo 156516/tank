@@ -2,342 +2,100 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
+// 简化的敌人:自动开火,只朝 Heart 走。
 public class Enemy : MonoBehaviour
 {
     public float moveSpeed = 3;
+    public float fireCooldown = 1.5f;
+
+    // 贴图 / 预制体
+    private SpriteRenderer sr;
+    public Sprite[] tankSprite;          // 上、下、左、右
+    public GameObject bulletPrefab;
+    public GameObject explosionPrefab;
+
+    // 击杀本敌人的玩家编号(Bullet 在击中时写入)
+    public int killerPlayerNumber = 1;
+
+    // 移动方向(强制 axis-aligned)
     private Vector3 bullectEulerAngles;
     private float h;
     private float v = -1;
 
-    // 击杀本敌人的玩家编号(由 Bullet 在击中时写入)
-    public int killerPlayerNumber = 1;
-
-    // 攻击 / 寻路冷却
+    // 开火冷却
     private float fireTimer;
-    private float retargetTimer;
 
-    // 卡死检测:OnCollisionStay 累计持续接触时间
-    private float stuckTime;
-    private const float StuckThreshold = 0.35f;  // 连续抵墙 0.35s 则进入"卡死救援"
-    // 区分墙和队友(墙会触发卡死救援,队友不会,允许短暂擦肩)
-    private bool stuckAgainstWall;
+    // 当前要冲的目标(由 Awake / Update 锁定 Heart)
+    private Transform target;
 
-    // 上一次同步等级的时间
-    private float lastAppliedLevel = -1;
-    private float syncTimer;
+    // 上次碰到墙后多久(用于撞墙 90 度转)
+    private float collideCooldown;
 
-    // AI 调参
-    public float fireCooldown = 1.5f;
-    public float detectRange = 1.0f;
-
-    // 破墙预算:一条路径需要打几堵砖墙才算"划算"
-    public int maxWallCost = 1;
-
-    // ——地图物体分类——
-    public enum BlockType { None, BreakableWall, SteelWall, Heart, EnemyTeammate, River, Grass, Other }
-
-    // 贴图 / 预制体
-    private SpriteRenderer sr;
-    public Sprite[] tankSprite;
-    public GameObject bulletPrefab;
-    public GameObject explosionPrefab;
-
-    // 当前目标(由 SelectTargetByDistance 选定,供 PlanPath / Opportunistic 使用)
-    private Transform currentTarget;
-
-    // ——DFS 路径规划——
-    private List<Vector2Int> pathPoints;
-    private int pathIndex;
-    private float nextPathPlanTime;
-    private float arrivalThreshold = 0.25f;
-
-    // ——时间窗口 ban——
-    private readonly Queue<Vector2Int> recentCells = new Queue<Vector2Int>();
-    private const int RecentMemory = 5;
-    private Vector2Int lastCell;
-
-    // Inspector 默认值,用于难度缩放
-    private float baseMoveSpeed;
-    private float baseFireCooldown;
-
-    private void Awake()
+    void Awake()
     {
         sr = GetComponent<SpriteRenderer>();
-        // 显式 axis-aligned 起始
+        // 起始 axis-aligned 朝下,不斜走
         h = 0f;
         v = -1f;
         fireTimer = Random.Range(0f, fireCooldown);
-        baseMoveSpeed = moveSpeed;
-        baseFireCooldown = fireCooldown;
-        SyncDifficulty();
-    }
-
-    void Start()
-    {
-        Retarget();
+        collideCooldown = 0f;
+        AcquireTarget();
     }
 
     void Update()
     {
-        // 最简自动开火:timer 到点就开火,不看前方、不依赖路径策略、不依赖 CoR
+        // 自动开火:timer 到点就开,不看前方是什么
         fireTimer += Time.deltaTime;
         if (fireTimer >= fireCooldown)
         {
-            AttackMethod();
+            Fire();
             fireTimer = 0f;
         }
 
-        // 每 2 秒同步一次难度
-        syncTimer += Time.deltaTime;
-        if (syncTimer >= 2.0f)
+        // Heart 可能被毁或动态生成;每 0.5s 重新锁定
+        if (target == null || (target.gameObject != null && !target.gameObject.activeInHierarchy))
         {
-            SyncDifficulty();
-            syncTimer = 0f;
-        }
-
-        // 周期重选目标(按距离)
-        retargetTimer += Time.deltaTime;
-        if (retargetTimer >= 0.5f || currentTarget == null)
-        {
-            Retarget();
-            retargetTimer = 0f;
-        }
-
-        // 野指针防御:目标 GameObject 可能这一帧被 Destroy
-        if (currentTarget == null ||
-            (currentTarget.gameObject != null && !currentTarget.gameObject.activeInHierarchy))
-        {
-            currentTarget = null;
+            AcquireTarget();
         }
     }
 
-    private void FixedUpdate()
+    // 找 Heart 作为唯一目标
+    private void AcquireTarget()
     {
-        MoveMethod();
-    }
-
-    private void AttackMethod()
-    {
-        Instantiate(bulletPrefab, transform.position, Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
-    }
-
-    // 核心:按距离选择目标 — 离玩家近就追玩家,离 Heart 近就追 Heart
-    // 配合 EnemyCoordination.TryClaim 锁定,每个目标最多被 2 个 enemy 围攻
-    private void Retarget()
-    {
-        // 先释放旧目标占用
-        GameObject oldTargetGo = (currentTarget != null && currentTarget.gameObject != null)
-            ? currentTarget.gameObject : null;
-        EnemyCoordination.Release(oldTargetGo, this);
-
-        currentTarget = SelectTargetByDistance();
-    }
-
-    // 收集候选目标(Heart + 存活玩家),按距离排序,锁定第一个可用
-    private Transform SelectTargetByDistance()
-    {
-        Vector3 self = transform.position;
-        List<Transform> candidates = new List<Transform>();
-
-        GameObject heart = GameObject.FindGameObjectWithTag("Heart");
-        if (heart != null && heart.activeInHierarchy)
+        GameObject go = GameObject.FindGameObjectWithTag("Heart");
+        if (go != null && go.activeInHierarchy)
         {
-            candidates.Add(heart.transform);
-        }
-
-        GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
-        for (int i = 0; i < tanks.Length; i++)
-        {
-            GameObject t = tanks[i];
-            if (t == null || !t.activeInHierarchy) continue;
-            if (t.GetComponent<Player>() == null) continue;
-            candidates.Add(t.transform);
-        }
-
-        if (candidates.Count == 0) return null;
-
-        // 按距离升序排序
-        candidates.Sort((a, b) =>
-            (a.position - self).sqrMagnitude.CompareTo((b.position - self).sqrMagnitude));
-
-        // 锁第一个还能装的;都装不下就返回 null(fallback 走随机)
-        for (int i = 0; i < candidates.Count; i++)
-        {
-            if (EnemyCoordination.TryClaim(candidates[i].gameObject, this))
-                return candidates[i];
-        }
-        return null;
-    }
-
-    // 主移动:路径走,撞墙换路线,砖墙开火,卡死救援
-    private void MoveMethod()
-    {
-        BlockType front = DetectFront();
-        UpdateRecentCells();
-
-        // 卡死救援:持续抵墙超过阈值,强制反向 + 重新规划
-        if (stuckAgainstWall)
-        {
-            stuckTime += Time.fixedDeltaTime;
-            if (stuckTime >= StuckThreshold)
-            {
-                // 反向(h, v 清零 + 垂直偏置),立即重新规划
-                EscapeStuck();
-            }
-        }
-
-        // 当前节点已到达?前进到下一个
-        if (pathPoints != null && pathIndex < pathPoints.Count)
-        {
-            Vector3 wp = MapGrid.CellToWorld(pathPoints[pathIndex]);
-            if (Vector3.Distance(transform.position, wp) < arrivalThreshold)
-            {
-                pathIndex++;
-                if (pathIndex < pathPoints.Count)
-                {
-                    SteerTowards(pathPoints[pathIndex]);
-                }
-                else
-                {
-                    PlanPath();
-                }
-            }
-        }
-
-        // 是否需要重算路径?
-        bool needReplan = false;
-        if (pathPoints == null || pathIndex >= pathPoints.Count) needReplan = true;
-        if (Time.time >= nextPathPlanTime) needReplan = true;
-        // 前方不可穿过的阻挡:立刻换路线
-        if (front == BlockType.SteelWall || front == BlockType.Heart || front == BlockType.River || front == BlockType.EnemyTeammate)
-        {
-            needReplan = true;
-        }
-        // 前方是砖墙:让 PlanPath 重新规划(DFS 优先尝试不开墙的绕路);Update 会照常开火打碎它
-        if (front == BlockType.BreakableWall)
-        {
-            needReplan = true;
-        }
-
-        if (needReplan)
-        {
-            PlanPath();
-            nextPathPlanTime = Time.time + Random.Range(0.8f, 1.6f) / PlayerManager.Instance.GetDifficultyMultiplier();
-        }
-
-        // 撞到铁墙 / 边界墙 / Heart / 队友时立刻把当前方向清零,防止继续嵌入墙体内
-        if (front == BlockType.SteelWall || front == BlockType.Heart ||
-            front == BlockType.River || front == BlockType.EnemyTeammate)
-        {
-            h = 0f;
-            v = 0f;
-        }
-        // Grass / 开放空间:按当前 (h, v) 直接走
-
-        // axis-aligned 防御
-        if (h != 0 && v != 0) v = 0;
-
-        // 真正移动
-        if (h != 0)
-            transform.Translate(Vector3.right * h * moveSpeed * Time.fixedDeltaTime, Space.World);
-        else if (v != 0)
-            transform.Translate(Vector3.up * v * moveSpeed * Time.fixedDeltaTime, Space.World);
-    }
-
-    // 重新规划路径(优先走空地,实在绕不开才破墙)
-    private void PlanPath()
-    {
-        if (currentTarget == null)
-        {
-            // 无目标:随机 axis-aligned 走
-            int num = Random.Range(0, 4);
-            if (num == 0) { v = 1f; h = 0f; }
-            else if (num == 1) { v = -1f; h = 0f; }
-            else if (num == 2) { v = 0f; h = 1f; }
-            else { v = 0f; h = -1f; }
-            pathPoints = null;
-            ApplySprite();
-            return;
-        }
-
-        MapGrid.Rebuild();
-        HashSet<Vector2Int> banned = CollectNearbyEnemyBans();
-
-        Vector2Int start = MapGrid.WorldToCell(transform.position);
-        Vector2Int end = MapGrid.WorldToCell(currentTarget.position);
-
-        // A* 优先走空地,失败再尝试破墙
-        bool usedBreak;
-        pathPoints = MapGrid.FindPathPreferOpen(start, end, banned, out usedBreak);
-
-        // 破墙代价太高就放弃这条路,fallback 朝目标直线;Update 看到砖墙会主动开火打碎
-        if (usedBreak && MapGrid.CountBreakableAlongPath(pathPoints) > maxWallCost)
-        {
-            pathPoints = null;
-        }
-        pathIndex = 0;
-
-        if (pathPoints != null && pathPoints.Count > 0)
-        {
-            SteerTowards(pathPoints[0]);
+            target = go.transform;
         }
         else
         {
-            Vector3 diff = currentTarget.position - transform.position;
-            if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
-            {
-                h = Mathf.Sign(diff.x);
-                v = 0;
-            }
-            else
-            {
-                v = Mathf.Sign(diff.y);
-                h = 0;
-            }
-            ApplySprite();
+            target = null;
         }
     }
 
-    // 收集附近敌人位置 + 自己最近走过的格子作为 ban 集,DFS/A* 不会走这些
-    private HashSet<Vector2Int> CollectNearbyEnemyBans()
+    private void Fire()
     {
-        HashSet<Vector2Int> banned = new HashSet<Vector2Int>();
-        foreach (var c in recentCells)
-        {
-            banned.Add(c);
-        }
-
-        GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
-        Vector3 selfPos = transform.position;
-        for (int i = 0; i < enemies.Length; i++)
-        {
-            GameObject e = enemies[i];
-            if (e == null || e == this.gameObject) continue;
-            float sqr = (e.transform.position - selfPos).sqrMagnitude;
-            if (sqr > 16f) continue;
-            banned.Add(MapGrid.WorldToCell(e.transform.position));
-        }
-        return banned;
+        Instantiate(bulletPrefab, transform.position,
+            Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
     }
 
-    // 每帧检查:进入新格子就压入 recentCells,超过容量出队
-    private void UpdateRecentCells()
+    void FixedUpdate()
     {
-        Vector2Int cur = MapGrid.WorldToCell(transform.position);
-        if (cur == lastCell) return;
-        lastCell = cur;
-        recentCells.Enqueue(cur);
-        while (recentCells.Count > RecentMemory)
-        {
-            recentCells.Dequeue();
-        }
+        Move();
     }
 
-    // 朝目标格子转方向(axis-aligned)
-    private void SteerTowards(Vector2Int cell)
+    // 朝 Heart 走;撞铁墙 / 河就 90 度随机转
+    private void Move()
     {
-        Vector3 wp = MapGrid.CellToWorld(cell);
-        Vector3 diff = wp - transform.position;
+        if (target == null)
+        {
+            // 没有目标:随机走
+            ApplyRandomDirection();
+            return;
+        }
+
+        // 朝向 Heart:选主轴方向(axis-aligned)
+        Vector3 diff = target.position - transform.position;
         if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
         {
             h = Mathf.Sign(diff.x);
@@ -348,37 +106,52 @@ public class Enemy : MonoBehaviour
             v = Mathf.Sign(diff.y);
             h = 0;
         }
+
+        // 撞到铁墙 / 边界空气墙 / 河(撞前检测,不被嵌入):90 度随机转
+        // 短冷却避免同帧反复触发
+        if (collideCooldown <= 0f)
+        {
+            Vector3 dir = new Vector3(h, v, 0);
+            RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, 0.55f);
+            if (hit.collider != null && IsBlocking(hit.collider))
+            {
+                // 旋转 90 度(若水平则改为垂直随机方向,反之亦然)
+                if (h != 0) { v = Random.value > 0.5f ? 1 : -1; h = 0; }
+                else        { h = Random.value > 0.5f ? 1 : -1; v = 0; }
+                collideCooldown = 0.15f;
+            }
+        }
+        else
+        {
+            collideCooldown -= Time.fixedDeltaTime;
+        }
+
+        ApplySprite();
+
+        // axis-aligned 防御
+        if (h != 0 && v != 0) v = 0;
+        if (h != 0) transform.Translate(Vector3.right * h * moveSpeed * Time.fixedDeltaTime, Space.World);
+        else if (v != 0) transform.Translate(Vector3.up * v * moveSpeed * Time.fixedDeltaTime, Space.World);
+    }
+
+    private void ApplyRandomDirection()
+    {
+        int n = Random.Range(0, 4);
+        if (n == 0) { v = 1f; h = 0f; }
+        else if (n == 1) { v = -1f; h = 0f; }
+        else if (n == 2) { v = 0f; h = 1f; }
+        else { v = 0f; h = -1f; }
         ApplySprite();
     }
 
-    // 仅检测前方是否有可碎砖墙(tag = "Wall")。用于 AttackMethod 触发判定。
-    private bool IsBreakableWallInFront()
+    private bool IsBlocking(Collider2D col)
     {
-        Vector3 dir = new Vector3(h, v, 0);
-        if (dir == Vector3.zero) return false;
-        RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, detectRange);
-        return hit.collider != null && hit.collider.CompareTag("Wall");
+        string tag = col.tag;
+        if (tag == "Barrier" || tag == "Heart") return true;
+        if (col.gameObject.name == "River") return true;
+        return false;
     }
 
-    // 详细的前方物体分类
-    private BlockType DetectFront()
-    {
-        Vector3 dir = new Vector3(h, v, 0);
-        if (dir == Vector3.zero) return BlockType.None;
-        RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, detectRange);
-        if (hit.collider == null) return BlockType.None;
-
-        string tag = hit.collider.tag;
-        if (tag == "Wall") return BlockType.BreakableWall;
-        if (tag == "Barrier") return BlockType.SteelWall;
-        if (tag == "Heart") return BlockType.Heart;
-        if (tag == "Enemy") return BlockType.EnemyTeammate;
-        if (hit.collider.gameObject.name == "River") return BlockType.River;
-        if (hit.collider.gameObject.name == "Grass") return BlockType.Grass;
-        return BlockType.Other;
-    }
-
-    // 根据当前 h / v 切换精灵与子弹朝向
     private void ApplySprite()
     {
         if (h > 0) { sr.sprite = tankSprite[1]; bullectEulerAngles = new Vector3(0, 0, -90); }
@@ -393,136 +166,7 @@ public class Enemy : MonoBehaviour
         {
             PlayerManager.Instance.AddScore(killerPlayerNumber);
         }
-        // 死亡时释放占用
-        GameObject cur = (currentTarget != null && currentTarget.gameObject != null)
-            ? currentTarget.gameObject : null;
-        EnemyCoordination.Release(cur, this);
-
         Instantiate(explosionPrefab, transform.position, transform.rotation);
         Destroy(this.gameObject);
-    }
-
-    // 兜底:GameObject 被销毁时释放占用
-    private void OnDestroy()
-    {
-        if (currentTarget != null && currentTarget.gameObject != null)
-            EnemyCoordination.Release(currentTarget.gameObject, this);
-    }
-
-    private void OnCollisionEnter2D(Collision2D collision)
-    {
-        if (collision == null) return;
-
-        // 敌人撞敌人:立刻重新规划
-        if (collision.gameObject.CompareTag("Enemy"))
-        {
-            PlanPath();
-            nextPathPlanTime = Time.time + Random.Range(0.3f, 1.0f);
-            return;
-        }
-
-        // 撞铁墙 / 边界空气墙 / 河流:开始累计"卡墙时间"
-        if (IsBlockingTag(collision.gameObject.tag) ||
-            collision.gameObject.name == "River")
-        {
-            stuckAgainstWall = true;
-        }
-    }
-
-    private void OnCollisionStay2D(Collision2D collision)
-    {
-        // 持续抵墙则继续累积,走到阈值就触发救援
-        if (stuckAgainstWall) return;
-        if (collision == null) return;
-        if (IsBlockingTag(collision.gameObject.tag) ||
-            collision.gameObject.name == "River")
-        {
-            stuckAgainstWall = true;
-        }
-    }
-
-    private void OnCollisionExit2D(Collision2D collision)
-    {
-        // 一旦脱离接触就重置计数器
-        if (collision != null)
-        {
-            stuckAgainstWall = false;
-            stuckTime = 0f;
-        }
-    }
-
-    // 是否是"不可通过 + 卡住你"的物体
-    private bool IsBlockingTag(string tag)
-    {
-        return tag == "Barrier" || tag == "Heart" || tag == "Wall" || tag == "AirBarrier";
-    }
-
-    // 卡死救援:扫描 4 个方向,找一个无阻挡的方向走出去
-    // 不再只是清零 + PlanPath — 因为 PlanPath 会基于"嵌入位置的格子"重新算,
-    // 反复把路径指向同堵墙,结果敌人仍静止
-    private void EscapeStuck()
-    {
-        Vector3 selfPos = transform.position;
-        Vector2Int[] candidates = {
-            new Vector2Int(0, 1),   // 上
-            new Vector2Int(0, -1),  // 下
-            new Vector2Int(1, 0),   // 右
-            new Vector2Int(-1, 0)   // 左
-        };
-
-        // 优先选当前 (h, v) 方向的反方向作为最强候选
-        int reversePriority = 0;
-        if (h > 0) reversePriority = 3;       // h>0(右)→ 优先往左
-        else if (h < 0) reversePriority = 2;  // h<0(左)→ 优先往右
-        else if (v > 0) reversePriority = 1;  // v>0(上)→ 优先往下
-        else if (v < 0) reversePriority = 0;  // v<0(下)→ 优先往上
-
-        bool found = false;
-        // 先试反方向;再试剩下 3 个
-        for (int tryIdx = 0; tryIdx < 4 && !found; tryIdx++)
-        {
-            int idx = (reversePriority + tryIdx) % 4;
-            Vector2Int d = candidates[idx];
-            // 模拟走一步到的新位置
-            Vector3 testPos = selfPos + new Vector3(d.x * 0.6f, d.y * 0.6f, 0);
-            Collider2D col = Physics2D.OverlapPoint(testPos);
-            if (col == null) { found = true; }
-            else if (!IsBlockingTag(col.tag) && col.gameObject.name != "River")
-            {
-                // 撞到的不是墙,可以走
-                found = true;
-            }
-            if (found)
-            {
-                h = d.x;
-                v = d.y;
-            }
-        }
-
-        if (!found)
-        {
-            // 真的四面都堵死,放弃挣扎,清零
-            h = 0f;
-            v = 0f;
-        }
-
-        pathPoints = null;
-        stuckAgainstWall = false;
-        stuckTime = 0f;
-        nextPathPlanTime = Time.time + 0.1f;
-        PlanPath();
-    }
-
-    // 难度升级
-    private void SyncDifficulty()
-    {
-        if (PlayerManager.Instance == null) return;
-        int lvl = PlayerManager.Instance.currentLevel;
-        if (lvl == lastAppliedLevel) return;
-        lastAppliedLevel = lvl;
-
-        float mult = PlayerManager.Instance.GetDifficultyMultiplier();
-        moveSpeed = baseMoveSpeed * Mathf.Lerp(1f, 1.6f, Mathf.InverseLerp(1f, 2.4f, mult));
-        fireCooldown = Mathf.Max(0.5f, baseFireCooldown / Mathf.Lerp(1f, 1.5f, Mathf.InverseLerp(1f, 2.4f, mult)));
     }
 }

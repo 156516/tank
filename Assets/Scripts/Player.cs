@@ -83,7 +83,18 @@ public class Player : MonoBehaviour
     {
         if (Input.GetKeyDown(fireKey))
         {
-            Instantiate(bulletPrefab, transform.position, Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
+            GameObject bulletObj = Instantiate(bulletPrefab, transform.position, Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
+            // 显式标记这是玩家子弹 + 是哪个玩家发射的
+            // 这样不依赖 PlayerBullet.prefab 的 Inspector 设置,确保两位玩家都正常
+            if (bulletObj != null)
+            {
+                Bullet b = bulletObj.GetComponent<Bullet>();
+                if (b != null)
+                {
+                    b.isPlayerBullet = true;
+                    b.shootingPlayerNumber = playerNumber;
+                }
+            }
             timeVal = 0;
         }
     }

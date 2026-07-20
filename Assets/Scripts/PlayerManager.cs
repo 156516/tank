@@ -44,6 +44,19 @@ public class PlayerManager : MonoBehaviour
     private void Awake()
     {
         instance = this;
+        // 双人模式下,如果 Inspector 没拖 player2Prefab,就自动从 MapCreation 同步一次,
+        // 避免重生时 Born 因 player2Prefab 为 null 而错误地孵化成 Player 1
+        SyncTwoPlayerRefs();
+    }
+
+    private void SyncTwoPlayerRefs()
+    {
+        if (player2Prefab != null) return;
+        MapCreation mc = FindObjectOfType<MapCreation>();
+        if (mc != null)
+        {
+            player2Prefab = mc.player2Prefab;
+        }
     }
 
     void Update()

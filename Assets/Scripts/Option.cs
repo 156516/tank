@@ -1,22 +1,19 @@
 using System.Collections;
 using System.Collections.Generic;
-using System.Xml.Serialization;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
 public class Option : MonoBehaviour
 {
     private int choice = 1;
-    public Transform posOne;
-    public Transform posTwo;
+    public Transform posOne;   // 单人游戏选项位置
+    public Transform posTwo;   // 双人游戏选项位置
 
-    // Start is called before the first frame update
     void Start()
     {
-        
+
     }
 
-    // Update is called once per frame
     void Update()
     {
         if (Input.GetKeyDown(KeyCode.W))
@@ -29,8 +26,12 @@ public class Option : MonoBehaviour
             choice = 2;
             transform.position = posTwo.position;
         }
-        if (choice == 1 && Input.GetKeyDown(KeyCode.Space))
+
+        if (Input.GetKeyDown(KeyCode.Space))
         {
+            // 根据当前选择把模式写入 MenuOptions(供战斗场景 MapCreation 读取)
+            MenuOptions.isTwoPlayerMode = (choice == 2);
+            MenuOptions.menuChoiceMade = true;
             SceneManager.LoadScene(1);
         }
     }

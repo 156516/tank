@@ -21,6 +21,13 @@ public class MapCreation : MonoBehaviour
 
     private void Awake()
     {
+        // 如果用户从主菜单(MenuOptions)选择过单/双人模式,用菜单的选择覆盖 Inspector 默认值
+        // 直接 Play 本场景(未经过菜单)时,保留 Inspector 编辑的值
+        if (MenuOptions.menuChoiceMade)
+        {
+            twoPlayerMode = MenuOptions.isTwoPlayerMode;
+            MenuOptions.menuChoiceMade = false;
+        }
         InitMap();
     }
 

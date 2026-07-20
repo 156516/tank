@@ -238,9 +238,9 @@ MonoBehaviour:
   score: 0
   isDead: 0
   isDefeat: 0
-  player1Born: {fileID: 3932541018496167799, guid: 098d13d8d1cd19f43a3d23c9ad61f446, type: 3}
-  player2Born: {fileID: 3932541018496167799, guid: 098d13d8d1cd19f43a3d23c9ad61f446, type: 3}
-  player2Prefab: {fileID: 3932541018496167799, guid: 0f721bb629fb572ee41ab1dffe79afa6, type: 3}
+  player1Born: {fileID: 2143587116968008402, guid: ca050e8423d911c41a7f7f6c807f4f9e, type: 3}
+  player2Born: {fileID: 2143587116968008402, guid: ca050e8423d911c41a7f7f6c807f4f9e, type: 3}
+  player2Prefab: {fileID: 3932541018496167799, guid: 08433f4e6be3b6b4fa36a664023e5898, type: 3}
   playerScoreText: {fileID: 894392590}
   playerLifeValueText: {fileID: 7815668}
   isDefeatUI: {fileID: 1627724620}
@@ -392,7 +392,7 @@ MonoBehaviour:
   - {fileID: 7835741534632139966, guid: 402deb471aaf8994ca96abab7babb4c2, type: 3}
   - {fileID: 4968204003667450818, guid: 7414525223473d845a12c6e7adec8ab7, type: 3}
   - {fileID: 8204734117046846064, guid: 536e9615342faae4fa774defde793a22, type: 3}
-  player2Prefab: {fileID: 3932541018496167799, guid: 0f721bb629fb572ee41ab1dffe79afa6, type: 3}
+  player2Prefab: {fileID: 3932541018496167799, guid: 08433f4e6be3b6b4fa36a664023e5898, type: 3}
   twoPlayerMode: 1
 --- !u!4 &567054583
 Transform:

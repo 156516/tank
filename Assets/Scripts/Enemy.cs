@@ -31,6 +31,10 @@ public class Enemy : MonoBehaviour
     // HeartChaser「绕心刺人」:路上遇到玩家,临时切去打这个玩家
     public float opportunisticRadius = 3.0f;
 
+    // ——地图物体分类——
+    // 前方检测可识别的物体类型;不同类型采取不同策略
+    public enum BlockType { None, BreakableWall, SteelWall, Heart, EnemyTeammate, River, Grass, Other }
+
     // ——AI 协调策略——
     [Header("AI Role Distribution")]
     [Tooltip("出生时 roll < heartChaserChance -> 一心冲 Heart")]
@@ -233,18 +237,42 @@ public class Enemy : MonoBehaviour
         return best;
     }
 
-    // 主移动:到时刻就重新选方向,根据检测到的障碍立刻转向
+    // 主移动:到时刻就重新选方向,根据检测到的障碍立刻转向 / 打碎
     private void MoveMethod()
     {
+        BlockType front = DetectFront();
+
         if (Time.time >= nextChangeTime)
         {
             ChooseNewDirection();
             nextChangeTime = Time.time + Random.Range(changeDirMin, changeDirMax);
         }
-        else if (IsFrontBlocked())
+        else
         {
-            ChooseNewDirection();
-            nextChangeTime = Time.time + Random.Range(changeDirMin * 0.5f, changeDirMax);
+            // 不同物体不同反应:
+            switch (front)
+            {
+                case BlockType.BreakableWall:
+                    // 可碎墙:立刻开炮打穿(不动方向,等下一发子弹把墙打掉就能直走)
+                    if (fireTimer >= fireCooldown * 0.6f) AttackMethod();
+                    break;
+                case BlockType.SteelWall:
+                case BlockType.Heart:
+                case BlockType.EnemyTeammate:
+                case BlockType.River:
+                    // 不可碎 / 不能直接接触:换向绕路
+                    ChooseNewDirection();
+                    nextChangeTime = Time.time + Random.Range(changeDirMin * 0.5f, changeDirMax);
+                    break;
+                case BlockType.Grass:
+                    // 装饰草:直接穿过即可
+                    break;
+                case BlockType.None:
+                case BlockType.Other:
+                default:
+                    // 开放空间 / 识别不到:不动
+                    break;
+            }
         }
 
         // 真正移动
@@ -254,15 +282,24 @@ public class Enemy : MonoBehaviour
             transform.Translate(Vector3.up * v * moveSpeed * Time.fixedDeltaTime, Space.World);
     }
 
-    // 判断前方 1 格内是否被墙 / 障碍 / 队友挡住
-    private bool IsFrontBlocked()
+    // 详细的"前方物体分类":用 tag 区分 Wall/Barrier/Heart/Enemy,
+    // 用 GameObject.name 区分 River/Grass(River/Grass prefab 没设置自定义 tag)
+    private BlockType DetectFront()
     {
         Vector3 dir = new Vector3(h, v, 0);
-        if (dir == Vector3.zero) return false;
+        if (dir == Vector3.zero) return BlockType.None;
         RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, detectRange);
-        if (hit.collider == null) return false;
+        if (hit.collider == null) return BlockType.None;
+
         string tag = hit.collider.tag;
-        return tag == "Wall" || tag == "Barrier" || tag == "Heart" || tag == "Enemy";
+        if (tag == "Wall") return BlockType.BreakableWall;
+        if (tag == "Barrier") return BlockType.SteelWall;
+        if (tag == "Heart") return BlockType.Heart;
+        if (tag == "Enemy") return BlockType.EnemyTeammate;
+        // River / Grass 用 GameObject.name 区分
+        if (hit.collider.gameObject.name == "River") return BlockType.River;
+        if (hit.collider.gameObject.name == "Grass") return BlockType.Grass;
+        return BlockType.Other;
     }
 
     // 选择新方向:大概率朝目标,小概率随机

@@ -105,6 +105,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d09cd9fbf0168e14d8499f1bf552d744, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  playerNumber: 1
+  moveKeys: 77000000730000006100000064000000
+  fireKey: 32
   moveSpeed: 3
   tankSprite:
   - {fileID: 21300000, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}

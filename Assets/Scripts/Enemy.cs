@@ -14,7 +14,6 @@ public class Enemy : MonoBehaviour
 
     // 攻击 / 转向冷却
     private float fireTimer;          // 距离上一次攻击的累积时间
-    private float nextChangeTime;     // 距离下一次强制改变方向的绝对时间(Time.time)
     private float retargetTimer;      // 多久重新选一次目标
 
     // 上一次同步等级的时间(用于运行时升级)
@@ -23,9 +22,6 @@ public class Enemy : MonoBehaviour
 
     // AI 调参
     public float fireCooldown = 1.5f;
-    public float changeDirMin = 1.5f;
-    public float changeDirMax = 3.0f;
-    public float chaseProbability = 0.78f;  // 换方向时朝目标的概率
     public float detectRange = 1.0f;        // 前方射线长度
 
     // HeartChaser「绕心刺人」:路上遇到玩家,临时切去打这个玩家
@@ -57,10 +53,15 @@ public class Enemy : MonoBehaviour
     // HeartChaser 临时切去打玩家的「机会目标」,打掉 / 离开范围后清除
     private Transform opportunisticKill;
 
+    // ——DFS 路径规划——
+    private List<Vector2Int> pathPoints;     // 包含 [end, p1, p2, ...]
+    private int pathIndex;                   // 当前正前往 pathPoints 中的第几个格子
+    private float nextPathPlanTime;          // 下一次重算路径的绝对时间
+    private float arrivalThreshold = 0.25f;  // 进入"到达当前格点"的距离阈值
+
     // 保存 Inspector 中原始参数,作为难度缩放的基准
     private float baseMoveSpeed;
     private float baseFireCooldown;
-    private float baseChaseProbability;
     private float baseOpportunisticRadius;
 
     private void Awake()
@@ -69,8 +70,6 @@ public class Enemy : MonoBehaviour
         // 显式 axis-aligned 起始状态:水平方向 = 0,垂直方向 = -1(向下)
         h = 0f;
         v = -1f;
-        // 让 AI 一出生就开始动,而不是等 4 秒
-        nextChangeTime = Time.time + Random.Range(0.3f, 1.0f);
         // 略微错开开火时机,避免多只敌人同时开火
         fireTimer = Random.Range(0f, fireCooldown);
         // 决定本 enemy 一生扮演的角色(不会再变)
@@ -78,7 +77,6 @@ public class Enemy : MonoBehaviour
         // 把 Inspector 默认值记录下来,后续用作难度缩放基准
         baseMoveSpeed = moveSpeed;
         baseFireCooldown = fireCooldown;
-        baseChaseProbability = chaseProbability;
         baseOpportunisticRadius = opportunisticRadius;
         // 出生时立即按当前难度同步一次
         SyncDifficulty();
@@ -240,53 +238,125 @@ public class Enemy : MonoBehaviour
         return best;
     }
 
-    // 主移动:到时刻就重新选方向,根据检测到的障碍立刻转向 / 打碎
+    // 主移动:用 DFS 路径走,同时保持地图感知(撞墙/打墙)
     private void MoveMethod()
     {
         BlockType front = DetectFront();
 
-        if (Time.time >= nextChangeTime)
+        // 当前 path 节点已到达(进入阈值内)?前进到下一个
+        if (pathPoints != null && pathIndex < pathPoints.Count)
         {
-            ChooseNewDirection();
-            nextChangeTime = Time.time + Random.Range(changeDirMin, changeDirMax);
-        }
-        else
-        {
-            // 不同物体不同反应:
-            switch (front)
+            Vector3 wp = MapGrid.CellToWorld(pathPoints[pathIndex]);
+            if (Vector3.Distance(transform.position, wp) < arrivalThreshold)
             {
-                case BlockType.BreakableWall:
-                    // 可碎墙:立刻开炮打穿(不动方向,等下一发子弹把墙打掉就能直走)
-                    if (fireTimer >= fireCooldown * 0.6f) AttackMethod();
-                    break;
-                case BlockType.SteelWall:
-                case BlockType.Heart:
-                case BlockType.EnemyTeammate:
-                case BlockType.River:
-                    // 不可碎 / 不能直接接触:换向绕路
-                    ChooseNewDirection();
-                    nextChangeTime = Time.time + Random.Range(changeDirMin * 0.5f, changeDirMax);
-                    break;
-                case BlockType.Grass:
-                    // 装饰草:直接穿过即可
-                    break;
-                case BlockType.None:
-                case BlockType.Other:
-                default:
-                    // 开放空间 / 识别不到:不动
-                    break;
+                pathIndex++;
+                if (pathIndex < pathPoints.Count)
+                {
+                    SteerTowards(pathPoints[pathIndex]);
+                }
+                else
+                {
+                    PlanPath();
+                }
             }
         }
 
+        // 是否需要重算路径?
+        bool needReplan = false;
+        if (pathPoints == null || pathIndex >= pathPoints.Count) needReplan = true;
+        if (Time.time >= nextPathPlanTime) needReplan = true;
+        // 前方不可穿过的阻挡:立刻换路线
+        if (front == BlockType.SteelWall || front == BlockType.Heart || front == BlockType.River || front == BlockType.EnemyTeammate)
+        {
+            needReplan = true;
+        }
+
+        if (needReplan)
+        {
+            PlanPath();
+            // 重算间隔受难度缩放影响:高等级更频繁重算
+            nextPathPlanTime = Time.time + Random.Range(0.8f, 1.6f) / PlayerManager.Instance.GetDifficultyMultiplier();
+        }
+        else if (front == BlockType.BreakableWall)
+        {
+            // 可碎砖墙:开炮打穿,不重算路径
+            if (fireTimer >= fireCooldown * 0.6f) AttackMethod();
+        }
+        // Grass / 开放空间:按当前 (h, v) 直接走
+
         // ——axis-aligned 防御——
-        // 坦克只能走直线,任何 h 和 v 同时非零的情况都强制投影为水平
         if (h != 0 && v != 0) v = 0;
 
-        // 真正移动(显式 axis-aligned:同一帧只能沿一个轴)
+        // 真正移动(同一帧只能沿一个轴)
         if (h != 0)
             transform.Translate(Vector3.right * h * moveSpeed * Time.fixedDeltaTime, Space.World);
         else if (v != 0)
             transform.Translate(Vector3.up * v * moveSpeed * Time.fixedDeltaTime, Space.World);
+    }
+
+    // 重新规划路径(DFS);失败时退化到 chase 直线或随机方向
+    private void PlanPath()
+    {
+        if (currentTarget == null)
+        {
+            // 无目标 → 退化到随机轴-aligned 方向
+            int num = Random.Range(0, 4);
+            if (num == 0) { v = 1f; h = 0f; }
+            else if (num == 1) { v = -1f; h = 0f; }
+            else if (num == 2) { v = 0f; h = 1f; }
+            else { v = 0f; h = -1f; }
+            pathPoints = null;
+            ApplySprite();
+            return;
+        }
+
+        // 重建地图网格(砖墙状态可能改变)
+        MapGrid.Rebuild();
+
+        Vector2Int start = MapGrid.WorldToCell(transform.position);
+        Vector2Int end = MapGrid.WorldToCell(currentTarget.position);
+        // allowBreakable=true:遇到砖墙也按"可走"对待(打碎就过)
+        pathPoints = MapGrid.FindPath(start, end, allowBreakable: true);
+        pathIndex = 0;
+
+        if (pathPoints != null && pathPoints.Count > 0)
+        {
+            SteerTowards(pathPoints[0]);
+        }
+        else
+        {
+            // DFS 失败:直接朝目标走(直线,即便撞墙就交给 DetectFront 处理)
+            Vector3 diff = currentTarget.position - transform.position;
+            if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
+            {
+                h = Mathf.Sign(diff.x);
+                v = 0;
+            }
+            else
+            {
+                v = Mathf.Sign(diff.y);
+                h = 0;
+            }
+            ApplySprite();
+        }
+    }
+
+    // 朝目标格子转方向(axis-aligned)
+    private void SteerTowards(Vector2Int cell)
+    {
+        Vector3 wp = MapGrid.CellToWorld(cell);
+        Vector3 diff = wp - transform.position;
+        if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
+        {
+            h = Mathf.Sign(diff.x);
+            v = 0;
+        }
+        else
+        {
+            v = Mathf.Sign(diff.y);
+            h = 0;
+        }
+        ApplySprite();
     }
 
     // 详细的"前方物体分类":用 tag 区分 Wall/Barrier/Heart/Enemy,
@@ -307,36 +377,6 @@ public class Enemy : MonoBehaviour
         if (hit.collider.gameObject.name == "River") return BlockType.River;
         if (hit.collider.gameObject.name == "Grass") return BlockType.Grass;
         return BlockType.Other;
-    }
-
-    // 选择新方向:大概率朝目标,小概率随机
-    private void ChooseNewDirection()
-    {
-        bool chase = currentTarget != null && Random.value < chaseProbability;
-        if (chase)
-        {
-            Vector3 diff = currentTarget.position - transform.position;
-            if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
-            {
-                h = Mathf.Sign(diff.x);
-                v = 0;
-            }
-            else
-            {
-                v = Mathf.Sign(diff.y);
-                h = 0;
-            }
-        }
-        else
-        {
-            // 4 方向完全随机
-            int num = Random.Range(0, 4);
-            if (num == 0) { v = 1; h = 0; }
-            else if (num == 1) { v = -1; h = 0; }
-            else if (num == 2) { v = 0; h = 1; }
-            else { v = 0; h = -1; }
-        }
-        ApplySprite();
     }
 
     // 根据当前 h / v 切换精灵与子弹朝向
@@ -362,8 +402,9 @@ public class Enemy : MonoBehaviour
     {
         if (collision != null && collision.gameObject.CompareTag("Enemy"))
         {
-            ChooseNewDirection();
-            nextChangeTime = Time.time + Random.Range(0.3f, 1.0f);
+            // 撞到同伴:立刻重算路径,绕开拥堵
+            PlanPath();
+            nextPathPlanTime = Time.time + Random.Range(0.3f, 1.0f);
         }
     }
 
@@ -377,14 +418,9 @@ public class Enemy : MonoBehaviour
         lastAppliedLevel = lvl;
 
         float mult = PlayerManager.Instance.GetDifficultyMultiplier();
-        // 多属性同步调整
-        // 移动速度:线性放大(注意保留 1P/2P 玩家速度不变;只影响 enemy)
-        // 攻击间隔:变小(fireCooldown / mult,但不低于 0.5s 防止无敌)
-        // 追踪概率:加分母式,趋向 0.95
-        // 机会半径:加大
+        // 移动速度、攻击间隔、机会半径随难度增长
         moveSpeed = baseMoveSpeed * Mathf.Lerp(1f, 1.6f, Mathf.InverseLerp(1f, 2.4f, mult));
         fireCooldown = Mathf.Max(0.5f, baseFireCooldown / Mathf.Lerp(1f, 1.5f, Mathf.InverseLerp(1f, 2.4f, mult)));
-        chaseProbability = Mathf.Clamp(baseChaseProbability + (mult - 1f) * 0.08f, 0.5f, 0.95f);
         opportunisticRadius = baseOpportunisticRadius * Mathf.Lerp(1f, 1.6f, Mathf.InverseLerp(1f, 2.4f, mult));
     }
 }

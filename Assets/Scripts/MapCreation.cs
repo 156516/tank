@@ -95,6 +95,9 @@ public class MapCreation : MonoBehaviour
         {
             CreateItem(item[5], CreateRandomPosition(), Quaternion.identity);
         }
+
+        // 让 Enemy 在游戏开始前就有静态地图网格可用(DFS 寻路依赖)
+        MapGrid.Rebuild();
     }
 
     private void CreateItem(GameObject createGameObject, Vector3 createPosition, Quaternion createRotation)

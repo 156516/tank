@@ -58,6 +58,8 @@ public class Bullet : MonoBehaviour
                 Destroy(this.gameObject);
                 break;
             case "Wall":
+                // 把这堵砖墙从 MapGrid 标记为已碎,通知所有 enemy 立即重算路径
+                MapGrid.MarkWallBroken(MapGrid.WorldToCell(collision.transform.position));
                 Destroy(collision.gameObject);
                 Destroy(this.gameObject);
                 break;

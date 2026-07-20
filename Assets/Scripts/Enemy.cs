@@ -156,22 +156,27 @@ public class Enemy : MonoBehaviour
     {
         if (opportunisticKill != null)
         {
-            // 失去了(被子弹击中或距离过远),清掉,回到冲 Heart
+            // 当前有临时目标:检查是否还能继续追
             if (!opportunisticKill.gameObject.activeInHierarchy ||
                 Vector3.Distance(transform.position, opportunisticKill.position) > opportunisticRadius * 1.5f)
             {
+                // 失效,释放占用
+                EnemyCoordination.Release(opportunisticKill.gameObject, this);
                 opportunisticKill = null;
             }
             return;
         }
-        // 当前没有临时目标 → 在周围扫描一个玩家
+        // 没有临时目标 → 在周围扫描一个未锁满的玩家
         GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
-        float bestDist = opportunisticRadius * opportunisticRadius; // 用平方比较
+        float bestDist = opportunisticRadius * opportunisticRadius;
         Transform best = null;
         foreach (GameObject t in tanks)
         {
             if (t == null || !t.activeInHierarchy) continue;
             if (t.GetComponent<Player>() == null) continue;
+            // 协调:已经被锁满就跳过,否则会变成全场 4 个 enemy 全盯一个玩家
+            int lockedBy = EnemyCoordination.GetClaimCount(t.gameObject);
+            if (lockedBy >= EnemyCoordination.MaxLockOnPlayer) continue;
             float d = (t.transform.position - transform.position).sqrMagnitude;
             if (d < bestDist)
             {
@@ -180,6 +185,11 @@ public class Enemy : MonoBehaviour
             }
         }
         opportunisticKill = best;
+        // 临时目标也要占一个协调位(避免多个 HeartChaser 同时切去打一个玩家)
+        if (opportunisticKill != null)
+        {
+            EnemyCoordination.TryClaim(opportunisticKill.gameObject, this);
+        }
     }
 
     private void FixedUpdate()
@@ -192,21 +202,83 @@ public class Enemy : MonoBehaviour
         Instantiate(bulletPrefab, transform.position, Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
     }
 
-    // 按角色分配决定追逐目标
+    // 按角色分配 + 协调锁定,决定追逐目标
     private void Retarget()
     {
+        // 先释放旧目标占用(防止泄漏)
+        GameObject oldTargetGo = (currentTarget != null && currentTarget.gameObject != null)
+            ? currentTarget.gameObject : null;
+        EnemyCoordination.Release(oldTargetGo, this);
+
         switch (role)
         {
             case EnemyRole.HeartChaser:
-                currentTarget = FindHeart();
+                currentTarget = SelectTargetWithCoordination(preferHeart: true);
                 break;
             case EnemyRole.PlayerChaser:
-                currentTarget = FindClosestPlayer();
+                currentTarget = SelectTargetWithCoordination(preferHeart: false);
                 break;
             case EnemyRole.RandomWalker:
                 currentTarget = null;
                 break;
         }
+    }
+
+    // 协调选择目标:扫描候选(Heart / 玩家),按角色偏好 + 距离 + 锁定数挑选
+    // 偏好 Heart 的角色会优先 Heart;锁满就换其次目标;全锁满就放弃(返回 null)
+    private Transform SelectTargetWithCoordination(bool preferHeart)
+    {
+        // 收集所有候选目标(Heart + 活着的 Player)
+        List<Transform> heartCandidates = new List<Transform>();
+        List<Transform> playerCandidates = new List<Transform>();
+
+        GameObject heart = GameObject.FindGameObjectWithTag("Heart");
+        if (heart != null && heart.activeInHierarchy) heartCandidates.Add(heart.transform);
+
+        GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
+        foreach (GameObject t in tanks)
+        {
+            if (t == null || !t.activeInHierarchy) continue;
+            if (t.GetComponent<Player>() == null) continue;
+            playerCandidates.Add(t.transform);
+        }
+
+        // 距离排序:就近优先
+        Vector3 selfPos = transform.position;
+        playerCandidates.Sort((a, b) =>
+            (a.position - selfPos).sqrMagnitude.CompareTo((b.position - selfPos).sqrMagnitude));
+
+        // 按角色偏好依次尝试:HeartChaser 首选 Heart,被锁满再选玩家;
+        // PlayerChaser 优先最近玩家,被锁满再退而求 Heart 或其他
+        System.Action<List<Transform>> tryClaim = (list) =>
+        {
+            foreach (Transform t in list)
+            {
+                if (EnemyCoordination.TryClaim(t.gameObject, this)) return;
+            }
+        };
+
+        if (preferHeart)
+        {
+            // 先尝试 Heart,失败再尝试玩家
+            if (heartCandidates.Count > 0 && EnemyCoordination.TryClaim(heartCandidates[0].gameObject, this))
+                return heartCandidates[0];
+            foreach (var p in playerCandidates)
+            {
+                if (EnemyCoordination.TryClaim(p.gameObject, this)) return p;
+            }
+        }
+        else
+        {
+            // 先尝试最近玩家,失败再退而求 Heart
+            foreach (var p in playerCandidates)
+            {
+                if (EnemyCoordination.TryClaim(p.gameObject, this)) return p;
+            }
+            if (heartCandidates.Count > 0 && EnemyCoordination.TryClaim(heartCandidates[0].gameObject, this))
+                return heartCandidates[0];
+        }
+        return null;
     }
 
     // 找 Heart(若已被毁,返回 null,此时 HeartChaser 会走随机路径)
@@ -394,8 +466,25 @@ public class Enemy : MonoBehaviour
         {
             PlayerManager.Instance.AddScore(killerPlayerNumber);
         }
+        // 死亡时释放占用,避免 Coordination 持有 ghost enemy 引用
+        GameObject cur = (currentTarget != null && currentTarget.gameObject != null)
+            ? currentTarget.gameObject : null;
+        EnemyCoordination.Release(cur, this);
+        GameObject opp = (opportunisticKill != null && opportunisticKill.gameObject != null)
+            ? opportunisticKill.gameObject : null;
+        EnemyCoordination.Release(opp, this);
+
         Instantiate(explosionPrefab, transform.position, transform.rotation);
         Destroy(this.gameObject);
+    }
+
+    // 兜底:敌人 GameObject 被销毁(任意原因)时释放占用
+    private void OnDestroy()
+    {
+        if (currentTarget != null && currentTarget.gameObject != null)
+            EnemyCoordination.Release(currentTarget.gameObject, this);
+        if (opportunisticKill != null && opportunisticKill.gameObject != null)
+            EnemyCoordination.Release(opportunisticKill.gameObject, this);
     }
 
     private void OnCollisionEnter2D(Collision2D collision)

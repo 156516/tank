@@ -76,8 +76,22 @@ public class Enemy : MonoBehaviour
         Instantiate(bulletPrefab, transform.position, Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
     }
 
-    // 在场景中找最近的、活着的玩家坦克作为目标
+    // 优先级:Heart(基地) > 最近玩家。
+    // 因为撞掉基地 = 立刻结束游戏,所以敌人会优先尝试打基地;
+    // 只有当基地已经被毁,才把火力转向玩家。
     private void Retarget()
+    {
+        GameObject heart = GameObject.FindGameObjectWithTag("Heart");
+        if (heart != null && heart.activeInHierarchy)
+        {
+            targetTank = heart.transform;
+            return;
+        }
+        targetTank = FindClosestPlayer();
+    }
+
+    // 找最近的、活着的玩家坦克
+    private Transform FindClosestPlayer()
     {
         GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
         float bestDist = float.MaxValue;
@@ -94,7 +108,7 @@ public class Enemy : MonoBehaviour
                 best = t.transform;
             }
         }
-        targetTank = best;
+        return best;
     }
 
     // 主移动:到时刻就重新选方向,根据检测到的障碍立刻转向

@@ -184,4 +184,18 @@ public static class MapGrid
         usedBreakable = false;
         return null;
     }
+
+    // 统计一条路径经过的「可碎砖墙」格子数(用于判断是否值得付出多发子弹)
+    public static int CountBreakableAlongPath(List<Vector2Int> path)
+    {
+        if (path == null) return int.MaxValue;
+        int cost = 0;
+        for (int i = 0; i < path.Count; i++)
+        {
+            Vector2Int c = path[i];
+            if (c.x < 0 || c.x >= Cols || c.y < 0 || c.y >= Rows) continue;
+            if (cellType != null && cellType[c.x, c.y] == BreakableWall) cost++;
+        }
+        return cost;
+    }
 }

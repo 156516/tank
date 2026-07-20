@@ -27,6 +27,10 @@ public class Enemy : MonoBehaviour
     // HeartChaser「绕心刺人」:路上遇到玩家,临时切去打这个玩家
     public float opportunisticRadius = 3.0f;
 
+    // 破墙预算:一条路径需要打几堵砖墙才算"划算"。
+    // 1 = 只允许打一堵;>1 时如果得破多面墙就放弃(改走绕路或 fallback)
+    public int maxWallCost = 1;
+
     // ——地图物体分类——
     // 前方检测可识别的物体类型;不同类型采取不同策略
     public enum BlockType { None, BreakableWall, SteelWall, Heart, EnemyTeammate, River, Grass, Other }
@@ -418,7 +422,26 @@ public class Enemy : MonoBehaviour
         // 「优先走空地」:FindPathPreferOpen 先找不开墙的路径,失败再找允许破墙的
         bool usedBreak;
         pathPoints = MapGrid.FindPathPreferOpen(start, end, banned, out usedBreak);
-        lastPathUsedBreakable = usedBreak;
+
+        // 高代价评估:如果破墙路径需要打 maxWallCost 以上的砖墙,放弃这条,
+        // 改走 fallback(朝目标直线),留给下次重新规划时寻找更优路径
+        if (usedBreak)
+        {
+            int wallCost = MapGrid.CountBreakableAlongPath(pathPoints);
+            if (wallCost > maxWallCost)
+            {
+                pathPoints = null;
+                lastPathUsedBreakable = false;
+            }
+            else
+            {
+                lastPathUsedBreakable = true;
+            }
+        }
+        else
+        {
+            lastPathUsedBreakable = false;
+        }
         pathIndex = 0;
 
         if (pathPoints != null && pathPoints.Count > 0)
@@ -427,7 +450,7 @@ public class Enemy : MonoBehaviour
         }
         else
         {
-            // DFS 失败:直接朝目标走(直线,即便撞墙就交给 DetectFront 处理)
+            // DFS 全部超出预算 / 完全没有路:直接朝目标走(直线,撞墙交给 DetectFront + 后续重算)
             Vector3 diff = currentTarget.position - transform.position;
             if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
             {

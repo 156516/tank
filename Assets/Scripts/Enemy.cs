@@ -16,6 +16,12 @@ public class Enemy : MonoBehaviour
     private float fireTimer;
     private float retargetTimer;
 
+    // 卡死检测:OnCollisionStay 累计持续接触时间
+    private float stuckTime;
+    private const float StuckThreshold = 0.35f;  // 连续抵墙 0.35s 则进入"卡死救援"
+    // 区分墙和队友(墙会触发卡死救援,队友不会,允许短暂擦肩)
+    private bool stuckAgainstWall;
+
     // 上一次同步等级的时间
     private float lastAppliedLevel = -1;
     private float syncTimer;
@@ -73,15 +79,12 @@ public class Enemy : MonoBehaviour
 
     void Update()
     {
-        // 攻击冷却:看到砖墙就开火
+        // 最简自动开火:timer 到点就开火,不看前方、不依赖路径策略、不依赖 CoR
         fireTimer += Time.deltaTime;
         if (fireTimer >= fireCooldown)
         {
-            if (IsBreakableWallInFront())
-            {
-                AttackMethod();
-                fireTimer = 0f;
-            }
+            AttackMethod();
+            fireTimer = 0f;
         }
 
         // 每 2 秒同步一次难度
@@ -166,11 +169,22 @@ public class Enemy : MonoBehaviour
         return null;
     }
 
-    // 主移动:DFS 路径走,撞墙换路线,砖墙开火
+    // 主移动:路径走,撞墙换路线,砖墙开火,卡死救援
     private void MoveMethod()
     {
         BlockType front = DetectFront();
         UpdateRecentCells();
+
+        // 卡死救援:持续抵墙超过阈值,强制反向 + 重新规划
+        if (stuckAgainstWall)
+        {
+            stuckTime += Time.fixedDeltaTime;
+            if (stuckTime >= StuckThreshold)
+            {
+                // 反向(h, v 清零 + 垂直偏置),立即重新规划
+                EscapeStuck();
+            }
+        }
 
         // 当前节点已到达?前进到下一个
         if (pathPoints != null && pathIndex < pathPoints.Count)
@@ -209,6 +223,14 @@ public class Enemy : MonoBehaviour
         {
             PlanPath();
             nextPathPlanTime = Time.time + Random.Range(0.8f, 1.6f) / PlayerManager.Instance.GetDifficultyMultiplier();
+        }
+
+        // 撞到铁墙 / 边界墙 / Heart / 队友时立刻把当前方向清零,防止继续嵌入墙体内
+        if (front == BlockType.SteelWall || front == BlockType.Heart ||
+            front == BlockType.River || front == BlockType.EnemyTeammate)
+        {
+            h = 0f;
+            v = 0f;
         }
         // Grass / 开放空间:按当前 (h, v) 直接走
 
@@ -389,11 +411,64 @@ public class Enemy : MonoBehaviour
 
     private void OnCollisionEnter2D(Collision2D collision)
     {
-        if (collision != null && collision.gameObject.CompareTag("Enemy"))
+        if (collision == null) return;
+
+        // 敌人撞敌人:立刻重新规划
+        if (collision.gameObject.CompareTag("Enemy"))
         {
             PlanPath();
             nextPathPlanTime = Time.time + Random.Range(0.3f, 1.0f);
+            return;
         }
+
+        // 撞铁墙 / 边界空气墙 / 河流:开始累计"卡墙时间"
+        if (IsBlockingTag(collision.gameObject.tag) ||
+            collision.gameObject.name == "River")
+        {
+            stuckAgainstWall = true;
+        }
+    }
+
+    private void OnCollisionStay2D(Collision2D collision)
+    {
+        // 持续抵墙则继续累积,走到阈值就触发救援
+        if (stuckAgainstWall) return;
+        if (collision == null) return;
+        if (IsBlockingTag(collision.gameObject.tag) ||
+            collision.gameObject.name == "River")
+        {
+            stuckAgainstWall = true;
+        }
+    }
+
+    private void OnCollisionExit2D(Collision2D collision)
+    {
+        // 一旦脱离接触就重置计数器
+        if (collision != null)
+        {
+            stuckAgainstWall = false;
+            stuckTime = 0f;
+        }
+    }
+
+    // 是否是"不可通过 + 卡住你"的物体
+    private bool IsBlockingTag(string tag)
+    {
+        return tag == "Barrier" || tag == "Heart" || tag == "Wall" || tag == "AirBarrier";
+    }
+
+    // 卡死救援:反向 + 重新规划
+    private void EscapeStuck()
+    {
+        // 反正先把方向清零避免继续撞墙,PlanPath 会立即重算
+        h = 0f;
+        v = 0f;
+        pathPoints = null;
+        stuckAgainstWall = false;
+        stuckTime = 0f;
+        nextPathPlanTime = Time.time + 0.1f;  // 立刻重算
+        // 立刻跑一次 PlanPath(下一物理帧)
+        PlanPath();
     }
 
     // 难度升级

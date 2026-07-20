@@ -6,15 +6,23 @@ public class Enemy : MonoBehaviour
 {
     public float moveSpeed = 3;
     private Vector3 bullectEulerAngles;
-    float h;
-    float v = -1;
+    private float h;
+    private float v = -1;
 
     // 击杀本敌人的玩家编号(由 Bullet 在击中时写入)
     public int killerPlayerNumber = 1;
 
-    // 计时器
-    private float timeVal;
-    private float timeValChangeDirection = 4;
+    // 攻击 / 转向冷却
+    private float fireTimer;          // 距离上一次攻击的累积时间
+    private float nextChangeTime;     // 距离下一次强制改变方向的绝对时间(Time.time)
+    private float retargetTimer;      // 多久重新选一次目标
+
+    // AI 调参
+    public float fireCooldown = 1.5f;
+    public float changeDirMin = 1.5f;
+    public float changeDirMax = 3.0f;
+    public float chaseProbability = 0.78f;  // 改变方向时朝玩家的概率(其余则随机)
+    public float detectRange = 1.0f;        // 前方射线长度
 
     // 贴图 / 预制体
     private SpriteRenderer sr;
@@ -22,26 +30,39 @@ public class Enemy : MonoBehaviour
     public GameObject bulletPrefab;
     public GameObject explosionPrefab;
 
+    // 当前目标(最近且存活的玩家)
+    private Transform targetTank;
+
     private void Awake()
     {
         sr = GetComponent<SpriteRenderer>();
+        // 让 AI 一出生就开始动,而不是等 4 秒
+        nextChangeTime = Time.time + Random.Range(0.3f, 1.0f);
+        // 略微错开开火时机,避免多只敌人同时开火
+        fireTimer = Random.Range(0f, fireCooldown);
     }
 
     void Start()
     {
-
+        Retarget();
     }
 
     void Update()
     {
-        // 攻击计时器
-        if (timeVal < 3f)
-        {
-            timeVal += Time.deltaTime;
-        }
-        else
+        // 攻击冷却
+        fireTimer += Time.deltaTime;
+        if (fireTimer >= fireCooldown)
         {
             AttackMethod();
+            fireTimer = 0f;
+        }
+
+        // 周期性地重新选目标(场景里可能有玩家死亡重生)
+        retargetTimer += Time.deltaTime;
+        if (retargetTimer >= 0.5f || targetTank == null)
+        {
+            Retarget();
+            retargetTimer = 0f;
         }
     }
 
@@ -50,73 +71,104 @@ public class Enemy : MonoBehaviour
         MoveMethod();
     }
 
-    // 坦克的攻击方法
     private void AttackMethod()
     {
         Instantiate(bulletPrefab, transform.position, Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
-        timeVal = 0;
     }
 
-    // 坦克的移动方法
+    // 在场景中找最近的、活着的玩家坦克作为目标
+    private void Retarget()
+    {
+        GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
+        float bestDist = float.MaxValue;
+        Transform best = null;
+        foreach (GameObject t in tanks)
+        {
+            if (t == null || !t.activeInHierarchy) continue;
+            // 只追 Player(Enemy 也是 Tank tag,但没有 Player 组件)
+            if (t.GetComponent<Player>() == null) continue;
+            float d = (t.transform.position - transform.position).sqrMagnitude;
+            if (d < bestDist)
+            {
+                bestDist = d;
+                best = t.transform;
+            }
+        }
+        targetTank = best;
+    }
+
+    // 主移动:到时刻就重新选方向,根据检测到的障碍立刻转向
     private void MoveMethod()
     {
-        // 随机改变移动方向
-        if (timeValChangeDirection >= 4)
+        if (Time.time >= nextChangeTime)
         {
-            int num = Random.Range(0, 8);
-            if (num > 5)
+            ChooseNewDirection();
+            nextChangeTime = Time.time + Random.Range(changeDirMin, changeDirMax);
+        }
+        else if (IsFrontBlocked())
+        {
+            // 前方撞到东西(墙/障碍/enemy),立即换一个方向
+            ChooseNewDirection();
+            nextChangeTime = Time.time + Random.Range(changeDirMin * 0.5f, changeDirMax);
+        }
+
+        // 真正移动
+        if (h != 0)
+            transform.Translate(Vector3.right * h * moveSpeed * Time.fixedDeltaTime, Space.World);
+        if (v != 0)
+            transform.Translate(Vector3.up * v * moveSpeed * Time.fixedDeltaTime, Space.World);
+    }
+
+    // 判断前方 1 格内是否被墙 / 障碍 / 队友挡住
+    private bool IsFrontBlocked()
+    {
+        Vector3 dir = new Vector3(h, v, 0);
+        if (dir == Vector3.zero) return false;
+        RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, detectRange);
+        if (hit.collider == null) return false;
+        string tag = hit.collider.tag;
+        return tag == "Wall" || tag == "Barrier" || tag == "Heart" || tag == "Enemy";
+    }
+
+    // 选择新方向:大概率朝目标,小概率随机
+    private void ChooseNewDirection()
+    {
+        bool chase = targetTank != null && Random.value < chaseProbability;
+        if (chase)
+        {
+            Vector3 diff = targetTank.position - transform.position;
+            if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
             {
-                v = -1;
+                h = Mathf.Sign(diff.x);
+                v = 0;
+            }
+            else
+            {
+                v = Mathf.Sign(diff.y);
                 h = 0;
             }
-            else if (num == 0)
-            {
-                v = 1;
-                h = 0;
-            }
-            else if (num > 0 && num <= 2)
-            {
-                v = 0;
-                h = -1;
-            }
-            else if (num > 2 && num <= 4)
-            {
-                v = 0;
-                h = 1;
-            }
-            timeValChangeDirection = 0;
         }
         else
         {
-            timeValChangeDirection += Time.fixedDeltaTime;
+            // 4 方向完全随机
+            int num = Random.Range(0, 4);
+            if (num == 0) { v = 1; h = 0; }
+            else if (num == 1) { v = -1; h = 0; }
+            else if (num == 2) { v = 0; h = 1; }
+            else { v = 0; h = -1; }
         }
-        // 横向移动
-        transform.Translate(Vector3.right * h * moveSpeed * Time.fixedDeltaTime, Space.World);
-        if (h < 0)
-        {
-            sr.sprite = tankSprite[3];
-            bullectEulerAngles = new Vector3(0, 0, 90);
-        }
-        else if (h > 0)
-        {
-            sr.sprite = tankSprite[1];
-            bullectEulerAngles = new Vector3(0, 0, -90);
-        }
-        // 纵向移动
-        transform.Translate(Vector3.up * v * moveSpeed * Time.fixedDeltaTime, Space.World);
-        if (v < 0)
-        {
-            sr.sprite = tankSprite[2];
-            bullectEulerAngles = new Vector3(0, 0, -180);
-        }
-        else if (v > 0)
-        {
-            sr.sprite = tankSprite[0];
-            bullectEulerAngles = new Vector3(0, 0, 0);
-        }
+        ApplySprite();
     }
 
-    // 坦克的死亡方法:由 Bullet 击中时通过 SendMessage 调用
+    // 根据当前 h / v 切换精灵与子弹朝向
+    private void ApplySprite()
+    {
+        if (h > 0) { sr.sprite = tankSprite[1]; bullectEulerAngles = new Vector3(0, 0, -90); }
+        else if (h < 0) { sr.sprite = tankSprite[3]; bullectEulerAngles = new Vector3(0, 0, 90); }
+        else if (v > 0) { sr.sprite = tankSprite[0]; bullectEulerAngles = new Vector3(0, 0, 0); }
+        else if (v < 0) { sr.sprite = tankSprite[2]; bullectEulerAngles = new Vector3(0, 0, -180); }
+    }
+
     private void DieMethod()
     {
         if (PlayerManager.Instance != null)
@@ -127,11 +179,13 @@ public class Enemy : MonoBehaviour
         Destroy(this.gameObject);
     }
 
+    // 撞到同伴坦克:不必等下次换向,立刻绕路
     private void OnCollisionEnter2D(Collision2D collision)
     {
-        if (collision.gameObject.tag == "Enemy")
+        if (collision != null && collision.gameObject.CompareTag("Enemy"))
         {
-            timeValChangeDirection = 4;
+            ChooseNewDirection();
+            nextChangeTime = Time.time + Random.Range(0.3f, 1.0f);
         }
     }
 }

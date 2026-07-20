@@ -21,8 +21,15 @@ public class Enemy : MonoBehaviour
     public float fireCooldown = 1.5f;
     public float changeDirMin = 1.5f;
     public float changeDirMax = 3.0f;
-    public float chaseProbability = 0.78f;  // 改变方向时朝玩家的概率(其余则随机)
+    public float chaseProbability = 0.78f;  // 换方向时朝目标的概率
     public float detectRange = 1.0f;        // 前方射线长度
+
+    // ——AI 协调策略——
+    [Header("AI Role Distribution")]
+    [Tooltip("出生时 roll < heartChaserChance -> 一心冲 Heart")]
+    public float heartChaserChance = 0.5f;
+    [Tooltip("追击玩家的概率(在非心机者里的比例,例如 0.7 = 心机者之外 70% 追玩家,30% 随机晃动)")]
+    public float playerChaserShareInNonHearts = 0.7f;
 
     // 贴图 / 预制体
     private SpriteRenderer sr;
@@ -30,8 +37,12 @@ public class Enemy : MonoBehaviour
     public GameObject bulletPrefab;
     public GameObject explosionPrefab;
 
-    // 当前目标(最近且存活的玩家)
-    private Transform targetTank;
+    // ——角色分配——
+    public enum EnemyRole { HeartChaser, PlayerChaser, RandomWalker }
+    private EnemyRole role;
+
+    // 当前目标
+    private Transform currentTarget;
 
     private void Awake()
     {
@@ -40,6 +51,26 @@ public class Enemy : MonoBehaviour
         nextChangeTime = Time.time + Random.Range(0.3f, 1.0f);
         // 略微错开开火时机,避免多只敌人同时开火
         fireTimer = Random.Range(0f, fireCooldown);
+        // 决定本 enemy 一生扮演的角色(不会再变)
+        AssignRole();
+    }
+
+    // 出生时摇一次,决定此后走哪套决策
+    private void AssignRole()
+    {
+        float roll = Random.value;
+        if (roll < heartChaserChance)
+        {
+            role = EnemyRole.HeartChaser;
+        }
+        else
+        {
+            // 非心机者中,按 playerChaserShareInNonHearts 分配:追玩家 vs 随机晃
+            float remaining = Random.value;
+            role = (remaining < playerChaserShareInNonHearts)
+                ? EnemyRole.PlayerChaser
+                : EnemyRole.RandomWalker;
+        }
     }
 
     void Start()
@@ -57,9 +88,9 @@ public class Enemy : MonoBehaviour
             fireTimer = 0f;
         }
 
-        // 周期性地重新选目标(场景里可能有玩家死亡重生)
+        // 周期性地重新选目标
         retargetTimer += Time.deltaTime;
-        if (retargetTimer >= 0.5f || targetTank == null)
+        if (retargetTimer >= 0.5f || currentTarget == null)
         {
             Retarget();
             retargetTimer = 0f;
@@ -76,19 +107,50 @@ public class Enemy : MonoBehaviour
         Instantiate(bulletPrefab, transform.position, Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
     }
 
-    // 目标 = Heart(基地)。撞掉基地直接结束游戏,所以 AI 一心打基地。
-    // Heart 被毁后游戏已失败,敌人不再继续追玩家。
+    // 按角色分配决定追逐目标
     private void Retarget()
     {
+        switch (role)
+        {
+            case EnemyRole.HeartChaser:
+                currentTarget = FindHeart();
+                break;
+            case EnemyRole.PlayerChaser:
+                currentTarget = FindClosestPlayer();
+                break;
+            case EnemyRole.RandomWalker:
+                currentTarget = null;
+                break;
+        }
+    }
+
+    // 找 Heart(若已被毁,返回 null,此时 HeartChaser 会走随机路径)
+    private Transform FindHeart()
+    {
         GameObject heart = GameObject.FindGameObjectWithTag("Heart");
-        if (heart != null && heart.activeInHierarchy)
+        if (heart != null && heart.activeInHierarchy) return heart.transform;
+        return null;
+    }
+
+    // 找最近的、活着的玩家坦克
+    private Transform FindClosestPlayer()
+    {
+        GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
+        float bestDist = float.MaxValue;
+        Transform best = null;
+        foreach (GameObject t in tanks)
         {
-            targetTank = heart.transform;
+            if (t == null || !t.activeInHierarchy) continue;
+            // 只追 Player(Enemy 也是 Tank tag,但没有 Player 组件)
+            if (t.GetComponent<Player>() == null) continue;
+            float d = (t.transform.position - transform.position).sqrMagnitude;
+            if (d < bestDist)
+            {
+                bestDist = d;
+                best = t.transform;
+            }
         }
-        else
-        {
-            targetTank = null;
-        }
+        return best;
     }
 
     // 主移动:到时刻就重新选方向,根据检测到的障碍立刻转向
@@ -101,7 +163,6 @@ public class Enemy : MonoBehaviour
         }
         else if (IsFrontBlocked())
         {
-            // 前方撞到东西(墙/障碍/enemy),立即换一个方向
             ChooseNewDirection();
             nextChangeTime = Time.time + Random.Range(changeDirMin * 0.5f, changeDirMax);
         }
@@ -127,10 +188,10 @@ public class Enemy : MonoBehaviour
     // 选择新方向:大概率朝目标,小概率随机
     private void ChooseNewDirection()
     {
-        bool chase = targetTank != null && Random.value < chaseProbability;
+        bool chase = currentTarget != null && Random.value < chaseProbability;
         if (chase)
         {
-            Vector3 diff = targetTank.position - transform.position;
+            Vector3 diff = currentTarget.position - transform.position;
             if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
             {
                 h = Mathf.Sign(diff.x);
@@ -173,7 +234,6 @@ public class Enemy : MonoBehaviour
         Destroy(this.gameObject);
     }
 
-    // 撞到同伴坦克:不必等下次换向,立刻绕路
     private void OnCollisionEnter2D(Collision2D collision)
     {
         if (collision != null && collision.gameObject.CompareTag("Enemy"))

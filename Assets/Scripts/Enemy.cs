@@ -12,102 +12,58 @@ public class Enemy : MonoBehaviour
     // 击杀本敌人的玩家编号(由 Bullet 在击中时写入)
     public int killerPlayerNumber = 1;
 
-    // 攻击 / 转向冷却
-    private float fireTimer;          // 距离上一次攻击的累积时间
-    private float retargetTimer;      // 多久重新选一次目标
+    // 攻击 / 寻路冷却
+    private float fireTimer;
+    private float retargetTimer;
 
-    // 上一次同步等级的时间(用于运行时升级)
+    // 上一次同步等级的时间
     private float lastAppliedLevel = -1;
     private float syncTimer;
 
     // AI 调参
     public float fireCooldown = 1.5f;
-    public float detectRange = 1.0f;        // 前方射线长度
+    public float detectRange = 1.0f;
 
-    // HeartChaser「绕心刺人」:路上遇到玩家,临时切去打这个玩家
-    public float opportunisticRadius = 3.0f;
-
-    // 破墙预算:一条路径需要打几堵砖墙才算"划算"。
-    // 1 = 只允许打一堵;>1 时如果得破多面墙就放弃(改走绕路或 fallback)
+    // 破墙预算:一条路径需要打几堵砖墙才算"划算"
     public int maxWallCost = 1;
 
     // ——地图物体分类——
-    // 前方检测可识别的物体类型;不同类型采取不同策略
     public enum BlockType { None, BreakableWall, SteelWall, Heart, EnemyTeammate, River, Grass, Other }
-
-    // ——AI 协调策略——
-    [Header("AI Role Distribution")]
-    [Tooltip("出生时 roll < heartChaserChance -> 一心冲 Heart")]
-    public float heartChaserChance = 0.5f;
-    [Tooltip("追击玩家的概率(在非心机者里的比例,例如 0.7 = 心机者之外 70% 追玩家,30% 随机晃动)")]
-    public float playerChaserShareInNonHearts = 0.7f;
 
     // 贴图 / 预制体
     private SpriteRenderer sr;
-    public Sprite[] tankSprite; // 上、下、左、右
+    public Sprite[] tankSprite;
     public GameObject bulletPrefab;
     public GameObject explosionPrefab;
 
-    // ——角色分配——
-    public enum EnemyRole { HeartChaser, PlayerChaser, RandomWalker }
-    private EnemyRole role;
-
-    // 当前目标
+    // 当前目标(由 SelectTargetByDistance 选定,供 PlanPath / Opportunistic 使用)
     private Transform currentTarget;
-    // HeartChaser 临时切去打玩家的「机会目标」,打掉 / 离开范围后清除
-    private Transform opportunisticKill;
 
     // ——DFS 路径规划——
-    private List<Vector2Int> pathPoints;     // 包含 [end, p1, p2, ...]
-    private int pathIndex;                   // 当前正前往 pathPoints 中的第几个格子
-    private float nextPathPlanTime;          // 下一次重算路径的绝对时间
-    private float arrivalThreshold = 0.25f;  // 进入"到达当前格点"的距离阈值
+    private List<Vector2Int> pathPoints;
+    private int pathIndex;
+    private float nextPathPlanTime;
+    private float arrivalThreshold = 0.25f;
 
     // ——时间窗口 ban——
-    // 记录本 enemy 最近走过的格子,PlanPath 时把这一段 ban 掉,避免来回跳头
     private readonly Queue<Vector2Int> recentCells = new Queue<Vector2Int>();
-    private const int RecentMemory = 5;       // 记住最近 5 个格子
-    private Vector2Int lastCell;              // 上一次记录的格子,用于检测"进入新格子"
+    private const int RecentMemory = 5;
+    private Vector2Int lastCell;
 
-    // 保存 Inspector 中原始参数,作为难度缩放的基准
+    // Inspector 默认值,用于难度缩放
     private float baseMoveSpeed;
     private float baseFireCooldown;
-    private float baseOpportunisticRadius;
 
     private void Awake()
     {
         sr = GetComponent<SpriteRenderer>();
-        // 显式 axis-aligned 起始状态:水平方向 = 0,垂直方向 = -1(向下)
+        // 显式 axis-aligned 起始
         h = 0f;
         v = -1f;
-        // 略微错开开火时机,避免多只敌人同时开火
         fireTimer = Random.Range(0f, fireCooldown);
-        // 决定本 enemy 一生扮演的角色(不会再变)
-        AssignRole();
-        // 把 Inspector 默认值记录下来,后续用作难度缩放基准
         baseMoveSpeed = moveSpeed;
         baseFireCooldown = fireCooldown;
-        baseOpportunisticRadius = opportunisticRadius;
-        // 出生时立即按当前难度同步一次
         SyncDifficulty();
-    }
-
-    // 出生时摇一次,决定此后走哪套决策
-    private void AssignRole()
-    {
-        float roll = Random.value;
-        if (roll < heartChaserChance)
-        {
-            role = EnemyRole.HeartChaser;
-        }
-        else
-        {
-            // 非心机者中,按 playerChaserShareInNonHearts 分配:追玩家 vs 随机晃
-            float remaining = Random.value;
-            role = (remaining < playerChaserShareInNonHearts)
-                ? EnemyRole.PlayerChaser
-                : EnemyRole.RandomWalker;
-        }
     }
 
     void Start()
@@ -117,11 +73,7 @@ public class Enemy : MonoBehaviour
 
     void Update()
     {
-        // 攻击冷却 + 仅在前方是可碎砖墙 **且当前 path 依赖破墙** 时才开火
-        // 攻击冷却 + 看到前方砖墙就开火
-        // Update 与路径策略解耦:无论走空地路径还是 fallback 撞墙,
-        // 只要 IsBreakableWallInFront true 就立刻射击,子弹打碎砖墙后
-        // MapGrid.MarkWallBroken 让下次 PlanPath 找到更优路径
+        // 攻击冷却:看到砖墙就开火
         fireTimer += Time.deltaTime;
         if (fireTimer >= fireCooldown)
         {
@@ -132,7 +84,7 @@ public class Enemy : MonoBehaviour
             }
         }
 
-        // 每 2 秒同步一次难度,等级变化时升级自身属性
+        // 每 2 秒同步一次难度
         syncTimer += Time.deltaTime;
         if (syncTimer >= 2.0f)
         {
@@ -140,13 +92,7 @@ public class Enemy : MonoBehaviour
             syncTimer = 0f;
         }
 
-        // HeartChaser 机会目标:路上有玩家 → 临时切换去打
-        if (role == EnemyRole.HeartChaser)
-        {
-            UpdateOpportunisticTarget();
-        }
-
-        // 周期性地重新选目标
+        // 周期重选目标(按距离)
         retargetTimer += Time.deltaTime;
         if (retargetTimer >= 0.5f || currentTarget == null)
         {
@@ -154,58 +100,11 @@ public class Enemy : MonoBehaviour
             retargetTimer = 0f;
         }
 
-        // 决定这一帧真正用的目标
-        currentTarget = opportunisticKill != null ? opportunisticKill : currentTarget;
-
-        // 防御:目标 GameObject 可能在这一帧被 Destroy(玩家阵亡),清掉野指针
+        // 野指针防御:目标 GameObject 可能这一帧被 Destroy
         if (currentTarget == null ||
             (currentTarget.gameObject != null && !currentTarget.gameObject.activeInHierarchy))
         {
             currentTarget = null;
-        }
-    }
-
-    // HeartChaser 的"绕心刺人"逻辑:
-    // - 如果 opportunistic 还在 / 在范围内,继续追它
-    // - 否则看周围有没有玩家,有就锁定
-    // - 直到玩家死亡 / 离开范围,才回到 Heart
-    private void UpdateOpportunisticTarget()
-    {
-        if (opportunisticKill != null)
-        {
-            // 当前有临时目标:检查是否还能继续追
-            if (!opportunisticKill.gameObject.activeInHierarchy ||
-                Vector3.Distance(transform.position, opportunisticKill.position) > opportunisticRadius * 1.5f)
-            {
-                // 失效,释放占用
-                EnemyCoordination.Release(opportunisticKill.gameObject, this);
-                opportunisticKill = null;
-            }
-            return;
-        }
-        // 没有临时目标 → 在周围扫描一个未锁满的玩家
-        GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
-        float bestDist = opportunisticRadius * opportunisticRadius;
-        Transform best = null;
-        foreach (GameObject t in tanks)
-        {
-            if (t == null || !t.activeInHierarchy) continue;
-            if (t.GetComponent<Player>() == null) continue;
-            // 协调:已经被锁满就跳过,否则会变成全场 4 个 enemy 全盯一个玩家
-            int lockedBy = EnemyCoordination.GetClaimCount(t.gameObject);
-            if (lockedBy >= EnemyCoordination.MaxLockOnPlayer) continue;
-            float d = (t.transform.position - transform.position).sqrMagnitude;
-            if (d < bestDist)
-            {
-                bestDist = d;
-                best = t.transform;
-            }
-        }
-        opportunisticKill = best;
-        // 临时目标也要占一个协调位(避免多个 HeartChaser 同时切去打一个玩家)
-        if (opportunisticKill != null)
-        {
-            EnemyCoordination.TryClaim(opportunisticKill.gameObject, this);
         }
     }
 
@@ -219,122 +118,61 @@ public class Enemy : MonoBehaviour
         Instantiate(bulletPrefab, transform.position, Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
     }
 
-    // 按角色分配 + 协调锁定,决定追逐目标
+    // 核心:按距离选择目标 — 离玩家近就追玩家,离 Heart 近就追 Heart
+    // 配合 EnemyCoordination.TryClaim 锁定,每个目标最多被 2 个 enemy 围攻
     private void Retarget()
     {
-        // 先释放旧目标占用(防止泄漏)
+        // 先释放旧目标占用
         GameObject oldTargetGo = (currentTarget != null && currentTarget.gameObject != null)
             ? currentTarget.gameObject : null;
         EnemyCoordination.Release(oldTargetGo, this);
 
-        switch (role)
-        {
-            case EnemyRole.HeartChaser:
-                currentTarget = SelectTargetWithCoordination(preferHeart: true);
-                break;
-            case EnemyRole.PlayerChaser:
-                currentTarget = SelectTargetWithCoordination(preferHeart: false);
-                break;
-            case EnemyRole.RandomWalker:
-                currentTarget = null;
-                break;
-        }
+        currentTarget = SelectTargetByDistance();
     }
 
-    // 协调选择目标:扫描候选(Heart / 玩家),按角色偏好 + 距离 + 锁定数挑选
-    // 偏好 Heart 的角色会优先 Heart;锁满就换其次目标;全锁满就放弃(返回 null)
-    private Transform SelectTargetWithCoordination(bool preferHeart)
+    // 收集候选目标(Heart + 存活玩家),按距离排序,锁定第一个可用
+    private Transform SelectTargetByDistance()
     {
-        // 收集所有候选目标(Heart + 活着的 Player)
-        List<Transform> heartCandidates = new List<Transform>();
-        List<Transform> playerCandidates = new List<Transform>();
+        Vector3 self = transform.position;
+        List<Transform> candidates = new List<Transform>();
 
         GameObject heart = GameObject.FindGameObjectWithTag("Heart");
-        if (heart != null && heart.activeInHierarchy) heartCandidates.Add(heart.transform);
+        if (heart != null && heart.activeInHierarchy)
+        {
+            candidates.Add(heart.transform);
+        }
 
         GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
-        foreach (GameObject t in tanks)
+        for (int i = 0; i < tanks.Length; i++)
         {
+            GameObject t = tanks[i];
             if (t == null || !t.activeInHierarchy) continue;
             if (t.GetComponent<Player>() == null) continue;
-            playerCandidates.Add(t.transform);
+            candidates.Add(t.transform);
         }
 
-        // 距离排序:就近优先
-        Vector3 selfPos = transform.position;
-        playerCandidates.Sort((a, b) =>
-            (a.position - selfPos).sqrMagnitude.CompareTo((b.position - selfPos).sqrMagnitude));
+        if (candidates.Count == 0) return null;
 
-        // 按角色偏好依次尝试:HeartChaser 首选 Heart,被锁满再选玩家;
-        // PlayerChaser 优先最近玩家,被锁满再退而求 Heart 或其他
-        System.Action<List<Transform>> tryClaim = (list) =>
-        {
-            foreach (Transform t in list)
-            {
-                if (EnemyCoordination.TryClaim(t.gameObject, this)) return;
-            }
-        };
+        // 按距离升序排序
+        candidates.Sort((a, b) =>
+            (a.position - self).sqrMagnitude.CompareTo((b.position - self).sqrMagnitude));
 
-        if (preferHeart)
+        // 锁第一个还能装的;都装不下就返回 null(fallback 走随机)
+        for (int i = 0; i < candidates.Count; i++)
         {
-            // 先尝试 Heart,失败再尝试玩家
-            if (heartCandidates.Count > 0 && EnemyCoordination.TryClaim(heartCandidates[0].gameObject, this))
-                return heartCandidates[0];
-            foreach (var p in playerCandidates)
-            {
-                if (EnemyCoordination.TryClaim(p.gameObject, this)) return p;
-            }
-        }
-        else
-        {
-            // 先尝试最近玩家,失败再退而求 Heart
-            foreach (var p in playerCandidates)
-            {
-                if (EnemyCoordination.TryClaim(p.gameObject, this)) return p;
-            }
-            if (heartCandidates.Count > 0 && EnemyCoordination.TryClaim(heartCandidates[0].gameObject, this))
-                return heartCandidates[0];
+            if (EnemyCoordination.TryClaim(candidates[i].gameObject, this))
+                return candidates[i];
         }
         return null;
     }
 
-    // 找 Heart(若已被毁,返回 null,此时 HeartChaser 会走随机路径)
-    private Transform FindHeart()
-    {
-        GameObject heart = GameObject.FindGameObjectWithTag("Heart");
-        if (heart != null && heart.activeInHierarchy) return heart.transform;
-        return null;
-    }
-
-    // 找最近的、活着的玩家坦克
-    private Transform FindClosestPlayer()
-    {
-        GameObject[] tanks = GameObject.FindGameObjectsWithTag("Tank");
-        float bestDist = float.MaxValue;
-        Transform best = null;
-        foreach (GameObject t in tanks)
-        {
-            if (t == null || !t.activeInHierarchy) continue;
-            // 只追 Player(Enemy 也是 Tank tag,但没有 Player 组件)
-            if (t.GetComponent<Player>() == null) continue;
-            float d = (t.transform.position - transform.position).sqrMagnitude;
-            if (d < bestDist)
-            {
-                bestDist = d;
-                best = t.transform;
-            }
-        }
-        return best;
-    }
-
-    // 主移动:用 DFS 路径走,同时保持地图感知(撞墙/打墙)
+    // 主移动:DFS 路径走,撞墙换路线,砖墙开火
     private void MoveMethod()
     {
         BlockType front = DetectFront();
-        // 进入新格子就记录,后续 PlanPath 把这一段 ban 掉避免来回跳头
         UpdateRecentCells();
 
-        // 当前 path 节点已到达(进入阈值内)?前进到下一个
+        // 当前节点已到达?前进到下一个
         if (pathPoints != null && pathIndex < pathPoints.Count)
         {
             Vector3 wp = MapGrid.CellToWorld(pathPoints[pathIndex]);
@@ -361,8 +199,7 @@ public class Enemy : MonoBehaviour
         {
             needReplan = true;
         }
-        // 前方是砖墙:让 PlanPath 重新规划(DFS 优先尝试不开墙的绕路);
-        // Update 已经做了看到砖墙就开火,所以这里只关心路径不关心射击。
+        // 前方是砖墙:让 PlanPath 重新规划(DFS 优先尝试不开墙的绕路);Update 会照常开火打碎它
         if (front == BlockType.BreakableWall)
         {
             needReplan = true;
@@ -371,27 +208,26 @@ public class Enemy : MonoBehaviour
         if (needReplan)
         {
             PlanPath();
-            // 重算间隔受难度缩放影响:高等级更频繁重算
             nextPathPlanTime = Time.time + Random.Range(0.8f, 1.6f) / PlayerManager.Instance.GetDifficultyMultiplier();
         }
         // Grass / 开放空间:按当前 (h, v) 直接走
 
-        // ——axis-aligned 防御——
+        // axis-aligned 防御
         if (h != 0 && v != 0) v = 0;
 
-        // 真正移动(同一帧只能沿一个轴)
+        // 真正移动
         if (h != 0)
             transform.Translate(Vector3.right * h * moveSpeed * Time.fixedDeltaTime, Space.World);
         else if (v != 0)
             transform.Translate(Vector3.up * v * moveSpeed * Time.fixedDeltaTime, Space.World);
     }
 
-    // 重新规划路径(DFS);失败时退化到 chase 直线或随机方向
+    // 重新规划路径(优先走空地,实在绕不开才破墙)
     private void PlanPath()
     {
         if (currentTarget == null)
         {
-            // 无目标 → 退化到随机轴-aligned 方向
+            // 无目标:随机 axis-aligned 走
             int num = Random.Range(0, 4);
             if (num == 0) { v = 1f; h = 0f; }
             else if (num == 1) { v = -1f; h = 0f; }
@@ -402,20 +238,17 @@ public class Enemy : MonoBehaviour
             return;
         }
 
-        // 重建地图网格(砖墙状态可能改变)
         MapGrid.Rebuild();
-        // 收集附近敌人位置作为本 enemy 局部 ban,让多 enemy 自然分散到不同路径
         HashSet<Vector2Int> banned = CollectNearbyEnemyBans();
 
         Vector2Int start = MapGrid.WorldToCell(transform.position);
         Vector2Int end = MapGrid.WorldToCell(currentTarget.position);
 
-        // 「优先走空地」:FindPathPreferOpen 先找不开墙的路径,失败再找允许破墙的
+        // A* 优先走空地,失败再尝试破墙
         bool usedBreak;
         pathPoints = MapGrid.FindPathPreferOpen(start, end, banned, out usedBreak);
 
-        // 高代价评估:如果破墙路径需要打 maxWallCost 以上的砖墙,放弃这条,
-        // 改走 fallback(朝目标直线),留给下次重新规划时寻找更优路径
+        // 破墙代价太高就放弃这条路,fallback 朝目标直线;Update 看到砖墙会主动开火打碎
         if (usedBreak && MapGrid.CountBreakableAlongPath(pathPoints) > maxWallCost)
         {
             pathPoints = null;
@@ -428,7 +261,6 @@ public class Enemy : MonoBehaviour
         }
         else
         {
-            // DFS 全部超出预算 / 完全没有路:直接朝目标走(直线,撞墙交给 DetectFront + 后续重算)
             Vector3 diff = currentTarget.position - transform.position;
             if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
             {
@@ -444,18 +276,15 @@ public class Enemy : MonoBehaviour
         }
     }
 
-    // 收集附近敌人位置 + 自己最近走过的格子作为本 enemy 的 ban 列表
+    // 收集附近敌人位置 + 自己最近走过的格子作为 ban 集,DFS/A* 不会走这些
     private HashSet<Vector2Int> CollectNearbyEnemyBans()
     {
         HashSet<Vector2Int> banned = new HashSet<Vector2Int>();
-
-        // (1) 自己最近 5 个格子 ban:避免规划出让自己"原地打转"的路径
         foreach (var c in recentCells)
         {
             banned.Add(c);
         }
 
-        // (2) 周围 4 格内其他 Enemy 的当前位置 ban:与队友错开
         GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
         Vector3 selfPos = transform.position;
         for (int i = 0; i < enemies.Length; i++)
@@ -469,11 +298,11 @@ public class Enemy : MonoBehaviour
         return banned;
     }
 
-    // 每帧检查:进入新格子就把它压入 recentCells,超过容量出队
+    // 每帧检查:进入新格子就压入 recentCells,超过容量出队
     private void UpdateRecentCells()
     {
         Vector2Int cur = MapGrid.WorldToCell(transform.position);
-        if (cur == lastCell) return;     // 还在同一格,不入队
+        if (cur == lastCell) return;
         lastCell = cur;
         recentCells.Enqueue(cur);
         while (recentCells.Count > RecentMemory)
@@ -509,8 +338,7 @@ public class Enemy : MonoBehaviour
         return hit.collider != null && hit.collider.CompareTag("Wall");
     }
 
-    // 详细的"前方物体分类":用 tag 区分 Wall/Barrier/Heart/Enemy,
-    // 用 GameObject.name 区分 River/Grass(River/Grass prefab 没设置自定义 tag)
+    // 详细的前方物体分类
     private BlockType DetectFront()
     {
         Vector3 dir = new Vector3(h, v, 0);
@@ -523,7 +351,6 @@ public class Enemy : MonoBehaviour
         if (tag == "Barrier") return BlockType.SteelWall;
         if (tag == "Heart") return BlockType.Heart;
         if (tag == "Enemy") return BlockType.EnemyTeammate;
-        // River / Grass 用 GameObject.name 区分
         if (hit.collider.gameObject.name == "River") return BlockType.River;
         if (hit.collider.gameObject.name == "Grass") return BlockType.Grass;
         return BlockType.Other;
@@ -544,39 +371,32 @@ public class Enemy : MonoBehaviour
         {
             PlayerManager.Instance.AddScore(killerPlayerNumber);
         }
-        // 死亡时释放占用,避免 Coordination 持有 ghost enemy 引用
+        // 死亡时释放占用
         GameObject cur = (currentTarget != null && currentTarget.gameObject != null)
             ? currentTarget.gameObject : null;
         EnemyCoordination.Release(cur, this);
-        GameObject opp = (opportunisticKill != null && opportunisticKill.gameObject != null)
-            ? opportunisticKill.gameObject : null;
-        EnemyCoordination.Release(opp, this);
 
         Instantiate(explosionPrefab, transform.position, transform.rotation);
         Destroy(this.gameObject);
     }
 
-    // 兜底:敌人 GameObject 被销毁(任意原因)时释放占用
+    // 兜底:GameObject 被销毁时释放占用
     private void OnDestroy()
     {
         if (currentTarget != null && currentTarget.gameObject != null)
             EnemyCoordination.Release(currentTarget.gameObject, this);
-        if (opportunisticKill != null && opportunisticKill.gameObject != null)
-            EnemyCoordination.Release(opportunisticKill.gameObject, this);
     }
 
     private void OnCollisionEnter2D(Collision2D collision)
     {
         if (collision != null && collision.gameObject.CompareTag("Enemy"))
         {
-            // 撞到同伴:立刻重算路径,绕开拥堵
             PlanPath();
             nextPathPlanTime = Time.time + Random.Range(0.3f, 1.0f);
         }
     }
 
-    // 把当前 PlayerManager 难度应用到本 enemy 的属性上
-    // mult 范围 [1.0, 2.4];mult=1 时按 Inspector 默认值,mult=2.4 时大幅强化
+    // 难度升级
     private void SyncDifficulty()
     {
         if (PlayerManager.Instance == null) return;
@@ -585,9 +405,7 @@ public class Enemy : MonoBehaviour
         lastAppliedLevel = lvl;
 
         float mult = PlayerManager.Instance.GetDifficultyMultiplier();
-        // 移动速度、攻击间隔、机会半径随难度增长
         moveSpeed = baseMoveSpeed * Mathf.Lerp(1f, 1.6f, Mathf.InverseLerp(1f, 2.4f, mult));
         fireCooldown = Mathf.Max(0.5f, baseFireCooldown / Mathf.Lerp(1f, 1.5f, Mathf.InverseLerp(1f, 2.4f, mult)));
-        opportunisticRadius = baseOpportunisticRadius * Mathf.Lerp(1f, 1.6f, Mathf.InverseLerp(1f, 2.4f, mult));
     }
 }

@@ -154,6 +154,104 @@ public static class MapGrid
         return false;
     }
 
+    // A* 寻路:f = g + h,g 是实际代价(每步 +1,破墙 +2),h 是曼哈顿距离
+    // 找最优路径(在 admissible 启发式下);失败 null
+    public static List<Vector2Int> FindPathAStar(Vector2Int start, Vector2Int end,
+                                                bool allowBreakable, HashSet<Vector2Int> banned)
+    {
+        if (!initialized) return null;
+        if (!IsWalkableWithBan(end, allowBreakable, banned)) return null;
+        if (start == end) return new List<Vector2Int> { end };
+
+        // 优先队列:用 List 而非真正 priority queue(437 格够用)
+        List<AStarNode> open = new List<AStarNode>();
+        // 每个 cell 当前已知的最小 g
+        Dictionary<Vector2Int, float> bestG = new Dictionary<Vector2Int, float>();
+        // 每个 cell 的前驱(用于回溯路径)
+        Dictionary<Vector2Int, Vector2Int> cameFrom = new Dictionary<Vector2Int, Vector2Int>();
+        // closed 集(已扩展过)
+        HashSet<Vector2Int> closed = new HashSet<Vector2Int>();
+
+        bestG[start] = 0f;
+        open.Add(new AStarNode(start, 0f, Heuristic(start, end)));
+
+        const int MaxIter = 1000;
+        int iter = 0;
+
+        while (open.Count > 0 && iter < MaxIter)
+        {
+            iter++;
+            // 找到 f = g + h 最小的节点
+            int bestIdx = 0;
+            float bestF = open[0].g + open[0].h;
+            for (int i = 1; i < open.Count; i++)
+            {
+                float f = open[i].g + open[i].h;
+                if (f < bestF) { bestF = f; bestIdx = i; }
+            }
+            AStarNode cur = open[bestIdx];
+            open.RemoveAt(bestIdx);
+
+            if (cur.cell == end)
+            {
+                return ReconstructPath(cameFrom, cur.cell);
+            }
+            closed.Add(cur.cell);
+
+            for (int i = 0; i < FourDirs.Length; i++)
+            {
+                Vector2Int next = cur.cell + FourDirs[i];
+                if (!IsWalkableWithBan(next, allowBreakable, banned)) continue;
+                if (closed.Contains(next)) continue;
+
+                // 砖墙:允许破墙时 cost=2(避免为微优化乱绕),不允许时不会被 IsWalkableWithBan 放过
+                int type = cellType[next.x, next.y];
+                float stepCost = (type == BreakableWall && allowBreakable) ? 2f : 1f;
+                float tentativeG = cur.g + stepCost;
+
+                if (bestG.TryGetValue(next, out float oldG) && tentativeG >= oldG) continue;
+                bestG[next] = tentativeG;
+                cameFrom[next] = cur.cell;
+                open.Add(new AStarNode(next, tentativeG, Heuristic(next, end)));
+            }
+        }
+        return null;
+    }
+
+    private static float Heuristic(Vector2Int a, Vector2Int b)
+    {
+        return Mathf.Abs(a.x - b.x) + Mathf.Abs(a.y - b.y);  // 曼哈顿距离
+    }
+
+    private static List<Vector2Int> ReconstructPath(Dictionary<Vector2Int, Vector2Int> cameFrom,
+                                                    Vector2Int end)
+    {
+        List<Vector2Int> path = new List<Vector2Int>();
+        Vector2Int cur = end;
+        path.Add(cur);
+        while (cameFrom.TryGetValue(cur, out Vector2Int prev))
+        {
+            path.Add(prev);
+            cur = prev;
+        }
+        path.Reverse();   // 现在是 [start, ..., end]
+        // 去掉起点(start 由调用方决定)
+        if (path.Count > 0) path.RemoveAt(0);
+        return path;
+    }
+
+    // A* 节点(用类而不是 struct,避免 List 复制)
+    private class AStarNode
+    {
+        public Vector2Int cell;
+        public float g;
+        public float h;
+        public AStarNode(Vector2Int c, float g_, float h_)
+        {
+            cell = c; g = g_; h = h_;
+        }
+    }
+
     private static bool IsWalkableWithBan(Vector2Int cell, bool allowBreakable, HashSet<Vector2Int> banned)
     {
         if (!IsWalkable(cell, allowBreakable)) return false;
@@ -161,21 +259,21 @@ public static class MapGrid
         return true;
     }
 
-    // 「优先走空地」路径规划:先尝试不开砖墙的路径,失败再尝试允许破砖墙。
+    // 「优先走空地」路径规划:用 A* 算法,先尝试不开砖墙的路径,失败再尝试允许破砖墙。
     // out usedBreakable 表示最终路径是否依赖破砖(让 Enemy 知道是否主动开火)
     public static List<Vector2Int> FindPathPreferOpen(Vector2Int start, Vector2Int end,
                                                      HashSet<Vector2Int> banned,
                                                      out bool usedBreakable)
     {
         // 第一轮:走空地优先(砖墙当阻挡)
-        List<Vector2Int> path = FindPath(start, end, allowBreakable: false, banned);
+        List<Vector2Int> path = FindPathAStar(start, end, allowBreakable: false, banned);
         if (path != null)
         {
             usedBreakable = false;
             return path;
         }
         // 第二轮:允许破砖墙(实在绕不开时)
-        path = FindPath(start, end, allowBreakable: true, banned);
+        path = FindPathAStar(start, end, allowBreakable: true, banned);
         if (path != null)
         {
             usedBreakable = true;

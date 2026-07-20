@@ -12,6 +12,9 @@ public class Bullet : MonoBehaviour
     // 由哪个玩家发射的(1 = Player 1, 2 = Player 2),用于击杀得分归属
     public int shootingPlayerNumber = 1;
 
+    // 满级(星星道具)玩家子弹:可摧毁钢墙(Barrier)
+    public bool canBreakSteel;
+
     void Start()
     {
 
@@ -29,15 +32,16 @@ public class Bullet : MonoBehaviour
             case "Enemy":
                 if (isPlayerBullet)
                 {
-                    // 把击杀者编号写入敌人,击杀时由敌人把它传给 PlayerManager.AddScore
+                    // 交给 Enemy.Hit 处理扣血:装甲坦克需多次命中才死,killerPlayerNumber 用于得分归属
                     Enemy enemy = collision.GetComponent<Enemy>();
                     if (enemy != null)
                     {
-                        enemy.killerPlayerNumber = shootingPlayerNumber;
+                        enemy.Hit(shootingPlayerNumber);
                     }
-                    // 用 SendMessage 的目的是调 DieMethod,但 target 可能没挂 Enemy 组件;
-                    // 不过 Enemy 必然存在(否则不会 tag = Enemy),所以 SendMessage OK
-                    collision.SendMessage("DieMethod");
+                    else
+                    {
+                        collision.SendMessage("DieMethod", SendMessageOptions.DontRequireReceiver);
+                    }
                     Destroy(this.gameObject);
                 }
                 break;
@@ -58,7 +62,16 @@ public class Bullet : MonoBehaviour
                 if (isPlayerBullet)
                 {
                     Barrier barrier = collision.GetComponent<Barrier>();
-                    if (barrier != null) barrier.PlayAudio();
+                    if (barrier != null)
+                    {
+                        barrier.PlayAudio();
+                        // 满级子弹可击穿真正的钢墙(有 Barrier 组件),边界墙没组件不受影响
+                        if (canBreakSteel)
+                        {
+                            MapGrid.MarkCellWalkable(MapGrid.WorldToCell(collision.transform.position));
+                            Destroy(collision.gameObject);
+                        }
+                    }
                 }
                 Destroy(this.gameObject);
                 break;

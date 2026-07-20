@@ -2,6 +2,14 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
+// 一个升级等级对应的整套坦克贴图(4 方向静态帧 + 4 方向移动帧)
+[System.Serializable]
+public class TankLevelSprite
+{
+    public Sprite[] tankSprite;        // 上、右、下、左 静态帧
+    public Sprite[] tankSpriteMoving;  // 上、右、下、左 移动帧
+}
+
 public class Player : MonoBehaviour
 {
     // 玩家编号:1 = Player 1,2 = Player 2
@@ -22,9 +30,22 @@ public class Player : MonoBehaviour
     private float defendTimeVal = 3;
     private bool isDefended = true;
 
+    // ---- 道具:星星升级状态 ----
+    public int maxPowerLevel = 3;        // 升级上限
+    public float attackCooldown = 0.4f;  // 攻击间隔(升级后变短)
+    private int powerLevel = 0;          // 0 = 基础,每拾一颗星 +1
+
     // 贴图 / 预制体 / 音效
     private SpriteRenderer sr;
     public Sprite[] tankSprite;        // 上、下、左、右
+    // 移动动画第 2 帧(履带):与 tankSprite 同索引同顺序;留空则不做动画(保持静态)
+    public Sprite[] tankSpriteMoving;
+    public float treadAnimInterval = 0.1f;   // 履带换帧间隔(秒),越小滚得越快
+    private int treadFrame;                   // 0 = 静态帧,1 = 移动帧
+    private float treadTimer;
+    // 星星升级时按等级切换整套坦克贴图(index = powerLevel;留空则外观不变,只升属性)
+    public TankLevelSprite[] levelSprites;
+    private int lastDir = 0;                  // 最近朝向(0上/1右/2下/3左),升级后按此立刻刷新贴图
     public GameObject bulletPrefab;
     public GameObject explosionPrefab;
     public GameObject defendEffectPrefab;
@@ -59,7 +80,7 @@ public class Player : MonoBehaviour
             }
         }
         // 攻击 CD
-        if (timeVal < 0.4f)
+        if (timeVal < attackCooldown)
         {
             timeVal += Time.deltaTime;
         }
@@ -93,10 +114,41 @@ public class Player : MonoBehaviour
                 {
                     b.isPlayerBullet = true;
                     b.shootingPlayerNumber = playerNumber;
+                    // 星星升级:弹速随等级加快,满级可击穿钢墙
+                    b.moveSpeed *= 1f + 0.2f * powerLevel;
+                    b.canBreakSteel = powerLevel >= maxPowerLevel;
                 }
             }
             timeVal = 0;
         }
+    }
+
+    // 星星道具:提升火力等级(射速更快、弹速更快,满级击穿钢墙),并按等级切换坦克贴图
+    public void Upgrade()
+    {
+        if (powerLevel < maxPowerLevel) powerLevel++;
+        attackCooldown = Mathf.Max(0.15f, 0.4f - 0.08f * powerLevel);
+        ApplyLevelSprite();
+    }
+
+    // 按当前 powerLevel 换上对应的整套贴图,并立刻刷新当前朝向(未配置则外观不变)
+    private void ApplyLevelSprite()
+    {
+        if (levelSprites == null || levelSprites.Length == 0) return;
+        int idx = Mathf.Clamp(powerLevel, 0, levelSprites.Length - 1);
+        TankLevelSprite ls = levelSprites[idx];
+        if (ls == null) return;
+        if (ls.tankSprite != null && ls.tankSprite.Length >= 4) tankSprite = ls.tankSprite;
+        if (ls.tankSpriteMoving != null && ls.tankSpriteMoving.Length >= 4) tankSpriteMoving = ls.tankSpriteMoving;
+        if (sr != null) sr.sprite = TreadSprite(lastDir);   // 立刻换脸,不必等下次移动
+    }
+
+    // 头盔道具:获得(或续期)一段无敌保护,复用出生无敌机制
+    public void AddShield(float seconds)
+    {
+        isDefended = true;
+        defendTimeVal = seconds;
+        if (defendEffectPrefab != null) defendEffectPrefab.SetActive(true);
     }
 
     // 记录方向键的最后按下时刻
@@ -152,18 +204,32 @@ public class Player : MonoBehaviour
             }
         }
 
+        // 履带动画:移动时按间隔交替第 2 帧(未配置移动帧则保持静态)
+        if (h != 0 || v != 0)
+        {
+            treadTimer += Time.fixedDeltaTime;
+            if (treadTimer >= treadAnimInterval) { treadTimer = 0f; treadFrame ^= 1; }
+        }
+        else
+        {
+            treadTimer = 0f;
+            treadFrame = 0;
+        }
+
         if (h != 0)
         {
             transform.Translate(Vector3.right * h * moveSpeed * Time.fixedDeltaTime, Space.World);
             if (h < 0)
             {
-                sr.sprite = tankSprite[3];        // 左
                 bullectEulerAngles = new Vector3(0, 0, 90);
+                lastDir = 3;
+                sr.sprite = TreadSprite(3);        // 左
             }
             else if (h > 0)
             {
-                sr.sprite = tankSprite[1];        // 右
                 bullectEulerAngles = new Vector3(0, 0, -90);
+                lastDir = 1;
+                sr.sprite = TreadSprite(1);        // 右
             }
         }
         if (v != 0)
@@ -171,15 +237,28 @@ public class Player : MonoBehaviour
             transform.Translate(Vector3.up * v * moveSpeed * Time.fixedDeltaTime, Space.World);
             if (v < 0)
             {
-                sr.sprite = tankSprite[2];        // 下
                 bullectEulerAngles = new Vector3(0, 0, -180);
+                lastDir = 2;
+                sr.sprite = TreadSprite(2);        // 下
             }
             else if (v > 0)
             {
-                sr.sprite = tankSprite[0];        // 上
                 bullectEulerAngles = new Vector3(0, 0, 0);
+                lastDir = 0;
+                sr.sprite = TreadSprite(0);        // 上
             }
         }
+    }
+
+    // 选取当前方向要显示的帧:移动帧就绪且处于交替相位时用第 2 帧,否则用静态帧
+    private Sprite TreadSprite(int dir)
+    {
+        if (treadFrame == 1 && tankSpriteMoving != null &&
+            dir < tankSpriteMoving.Length && tankSpriteMoving[dir] != null)
+        {
+            return tankSpriteMoving[dir];
+        }
+        return tankSprite[dir];
     }
 
     // 死亡:由 Bullet 在命中玩家时调用

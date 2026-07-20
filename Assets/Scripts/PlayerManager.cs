@@ -67,6 +67,7 @@ public class PlayerManager : MonoBehaviour
     {
         // 在所有 Awake 之后读取最终模式(MapCreation.twoPlayerMode 此时已确定),按模式设初始生命
         lifeValue = ResolveTwoPlayerMode() ? twoPlayerLife : singlePlayerLife;
+        Enemy.ResetFreeze();   // 复位上一局残留的敌人冻结状态(时钟道具)
     }
 
     // 解析当前是否双人模式:优先取 MapCreation 的最终值,退而取 MenuOptions
@@ -127,7 +128,26 @@ public class PlayerManager : MonoBehaviour
     // 击杀得分:任何一位玩家击杀敌人都 +1,playerNumber 参数保留以兼容 Enemy.cs 的调用
     public void AddScore(int playerNumber)
     {
-        score++;
+        AddScore(playerNumber, 1);
+    }
+
+    // 带分值的重载:不同类型敌人击杀分值不同(基础1/快速2/装甲4 等)
+    public void AddScore(int playerNumber, int amount)
+    {
+        score += amount;
+    }
+
+    // 坦克道具:增加共享生命
+    public void AddLife(int n)
+    {
+        lifeValue += n;
+    }
+
+    // 拾取道具的固定加分(仿原版每个道具 500 分)
+    public int bonusScore = 500;
+    public void AddBonusScore()
+    {
+        score += bonusScore;
     }
 
     // 基地被毁 / 其他原因直接判负

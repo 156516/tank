@@ -109,11 +109,60 @@ MonoBehaviour:
   moveKeys: 77000000730000006100000064000000
   fireKey: 32
   moveSpeed: 3
+  maxPowerLevel: 3
+  attackCooldown: 0.4
   tankSprite:
   - {fileID: 21300000, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
   - {fileID: 21300016, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
   - {fileID: 21300032, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
   - {fileID: 21300048, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+  tankSpriteMoving:
+  - {fileID: 21300002, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+  - {fileID: 21300018, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+  - {fileID: 21300034, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+  - {fileID: 21300050, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+  treadAnimInterval: 0.1
+  levelSprites:
+  - tankSprite:
+    - {fileID: 21300000, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300016, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300032, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300048, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    tankSpriteMoving:
+    - {fileID: 21300002, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300018, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300034, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300050, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+  - tankSprite:
+    - {fileID: 21300004, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300020, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300036, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300052, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    tankSpriteMoving:
+    - {fileID: 21300006, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300022, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300038, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300054, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+  - tankSprite:
+    - {fileID: 21300008, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300024, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300040, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300056, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    tankSpriteMoving:
+    - {fileID: 21300010, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300026, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300042, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300058, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+  - tankSprite:
+    - {fileID: 21300012, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300028, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300044, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300060, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    tankSpriteMoving:
+    - {fileID: 21300014, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300030, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300046, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
+    - {fileID: 21300062, guid: c3a4b3c783ddce7438622efbc82d5538, type: 3}
   bulletPrefab: {fileID: 7467894289850518987, guid: 5bfbc40cbcf48684e8dd184272f117ef, type: 3}
   explosionPrefab: {fileID: 6137299851721532300, guid: 84c25dc7d4c527c4584c0d10b64b26fa, type: 3}
   defendEffectPrefab: {fileID: 7577107896441653967}

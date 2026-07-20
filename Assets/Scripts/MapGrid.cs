@@ -91,6 +91,14 @@ public static class MapGrid
         }
     }
 
+    // 把某格无条件标记为可走(满级子弹击穿钢墙 / 铁锹护罩到期恢复时用)
+    public static void MarkCellWalkable(Vector2Int cell)
+    {
+        if (!initialized) return;
+        if (cell.x < 0 || cell.x >= Cols || cell.y < 0 || cell.y >= Rows) return;
+        cellType[cell.x, cell.y] = Walkable;
+    }
+
     // 读出某格类型(供外部在 IsWalkable 之外做更细的判断,比如区分砖墙 vs 永久阻挡)
     // 没初始化或越界都视为永久阻挡(防御性)
     public static int GetCellType(Vector2Int cell)

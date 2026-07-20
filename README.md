@@ -40,6 +40,9 @@
 | 🚗 **玩家控制** | WASD / 方向键移动,空格 / Enter 发射子弹;同时按两方向时以最后按下的方向为准 |
 | 👥 **单人 / 双人本地合作** | 双人模式:Player1 用 WASD+Space,Player2 用方向键+Enter,共享同一张地图与基地;任一玩家有命时游戏继续 |
 | 🤖 **敌人 AI** | A\* 寻路绕开障碍、贴格移动不撞墙、按距离协作分工、躲避玩家子弹、随时间由弱变强 |
+| 🎁 **道具系统** | 6 种原版道具:加命 / 升级 / 手雷 / 头盔 / 铁锹 / 时钟,随机刷新、开车拾取 |
+| 🛠️ **多种敌坦** | 基础 / 快速 / 强化 / 装甲(4 血)等类型,速度·血量·弹速·分值各异 |
+| 🎞️ **动画表现** | 坦克移动履带动画、玩家升级换造型、主菜单开场 UI 从底部滑入 |
 | 🗺️ **随机地图生成** | 启动时自动铺设围墙、障碍物、草地、水域 |
 | 🛡️ **无敌保护** | 玩家出生 / 重生后 3 秒内免疫伤害 |
 | 💥 **粒子爆炸** | 坦克被摧毁时生成爆炸特效 |
@@ -197,18 +200,22 @@ tank/
 
 | 脚本 | 职责 |
 | --- | --- |
-| `Player.cs` | 玩家坦克移动、转向、射击、无敌时间控制;键位可配置 `moveKeys[4] + fireKey`,由 `Born.ApplyKeyMap` 根据玩家编号注入;`AttackMethod` 创建子弹后立即写 `isPlayerBullet + shootingPlayerNumber` |
-| `Born.cs` | 出生点:1 秒后孵化坦克后销毁自身;**已有 `playerPrefab` 与 `player2Prefab` 两个字段**(无需单独建 Born 2.prefab);`ApplyKeyMap` 根据 `playerNumber` 注入 WASD+Space / 方向键+Enter |
-| `Bullet.cs` | 子弹飞行、碰撞判定(对敌人 / 玩家 / 砖墙 / 铁墙 / Heart / Barrier);击中砖墙时调用 `MapGrid.MarkWallBroken` 让敌人重算路径;GetComponent 防御性 PlayAudio |
-| `MapGrid.cs` | 静态网格:23×19 格子化地图;`Rebuild` 先 `Physics2D.SyncTransforms()` 再用 `OverlapPoint` 扫描(否则刚实例化的碰撞体查不到);`FindPathPreferOpen` 提供 **A\*** 寻路(先走空地,不行才破墙,破墙 cost=2);河流按 `name.StartsWith("River")` 识别 |
-| `MapCreation.cs` | 启动时一次性随机生成地图;`MapGrid.Rebuild()` 在 InitMap 末尾调用;敌人刷怪点按模式区分(单人 2 处 / 双人 3 处),无并发上限;若 `twoPlayerMode=true` 在 `(-2,-8)` 与 `(2,-8)` 用同一份 Born 模板摆放两位玩家的出生点,运行时把 `player2Prefab` 注入 |
-| `Enemy.cs` | 敌方 AI(见下方"AI 子系统详解"):A\* 寻路 + 贴格移动、按距离协作选目标(基地/玩家)、撞墙转向/砖墙开火、随时间由弱变强 |
-| `EnemyDifficulty.cs` | 静态难度曲线:以 `Time.timeSinceLevelLoad` 为时钟,把敌人移动速度/开火冷却从「弱」在 `RampSeconds` 内线性插值到 Inspector 满级值 |
-| `PlayerManager.cs` | 单例管理器:**共享生命池**(单人 3 命 / 双人 6 命,`Start` 里按模式设定)与 **总分 `score`**,所有玩家共用;失败判定:`heart 被毁`(TriggerDefeat)或双方都无命,3 秒后回主菜单 |
+| `Player.cs` | 玩家坦克移动、转向、射击、无敌时间控制;键位可配置;移动履带动画(`tankSpriteMoving`);`Upgrade()` 星星升级(射速/弹速↑、满级击穿钢墙)并按 `levelSprites` 换造型;`AddShield()` 头盔无敌 |
+| `Born.cs` | 出生点:1 秒后孵化坦克后销毁自身;**已有 `playerPrefab` 与 `player2Prefab` 两个字段**;`enemyPrefablist` 随机孵化不同类型敌坦;`ApplyKeyMap` 根据 `playerNumber` 注入键位 |
+| `Bullet.cs` | 子弹飞行、碰撞判定;击中敌人调 `Enemy.Hit`(支持装甲坦克多血);`canBreakSteel` 时满级子弹可击穿钢墙;击中砖墙 `MapGrid.MarkWallBroken` |
+| `MapGrid.cs` | 静态网格:23×19 格子化地图;`Rebuild` 先 `Physics2D.SyncTransforms()` 再扫描;`FindPathPreferOpen` **A\*** 寻路;`MarkWallBroken` / `MarkCellWalkable` 清格;河流按 `name.StartsWith("River")` 识别 |
+| `MapCreation.cs` | 启动随机生成地图;敌人刷怪点按模式区分(单人 2 处 / 双人 3 处),无并发上限;双人模式摆放两位玩家出生点 |
+| `Enemy.cs` | 敌方 AI(见"AI 子系统详解");`maxHp`/`bulletSpeed`/`scoreValue` 区分坦克类型,`Hit()` 扣血;静态 `Freeze`/`KillAll` 供时钟/手雷道具调用 |
+| `EnemyDifficulty.cs` | 静态难度曲线:敌人移动速度/开火冷却/躲弹熟练度随 `Time.timeSinceLevelLoad` 从弱增强到满级 |
+| `PlayerManager.cs` | 单例:**共享生命池**(单人 3 / 双人 6)与总分;`AddLife`/`AddBonusScore` 供道具调用;`AddScore(player, amount)` 按敌坦分值计分 |
+| `Bonus.cs` | 道具本体:玩家靠近(距离检测,无需刚体)即拾取,派发 6 种效果并播放音效;闪烁 + 定时消失 |
+| `BonusSpawner.cs` | 道具生成器:定时在随机空地生成随机道具,单预制体 + 6 张图配置 |
+| `BaseGuard.cs` | 铁锹道具:把基地周围砖墙临时换成钢墙,到期恢复,重扫 `MapGrid` |
+| `MenuIntro.cs` | 主菜单开场动画:挂在 Canvas 上,所有 UI 从屏幕底部平滑滑入到位,动画期间禁用选择输入 |
 | `Heart.cs` | 基地逻辑:被击中即切换破碎贴图,调用 `PlayerManager.TriggerDefeat()` |
 | `Barrier.cs` | 障碍物被击中时播放音效;`GetComponent<Barrier>` 检查避免 no receiver 警告 |
 | `Explosion.cs` | 爆炸特效,0.167 秒后自动销毁 |
-| `Option.cs` | 主菜单选项切换与场景切换;按 Space 时根据 `choice` 把 `MenuOptions.isTwoPlayerMode` 写入再加载战斗场景 |
+| `Option.cs` | 主菜单选项切换与场景切换;按 Space 时把 `MenuOptions.isTwoPlayerMode` 写入再加载战斗场景 |
 | `MenuOptions.cs` | 静态类:在主菜单与战斗场景间共享单/双人模式 |
 
 ### 关键逻辑摘录
@@ -334,6 +341,36 @@ FixedUpdate → Move():
 
 ---
 
+## 🎁 道具系统
+
+`BonusSpawner` 每隔一段随机时间在随机空地生成一个随机道具;`Bonus` 用**距离检测**拾取(玩家开车靠近即可,不依赖刚体/触发),拾取播放 `GetBonus` 音效并加分。6 种道具对应 `Bonus.bmp` 的 6 张切片:
+
+| 道具 | 效果 | 实现 |
+| --- | --- | --- |
+| 🚗 坦克 | +1 命 | `PlayerManager.AddLife` |
+| ⭐ 星星 | 玩家升级:射速/弹速↑、满级击穿钢墙,并**切换坦克造型** | `Player.Upgrade` + `levelSprites` |
+| 💣 手雷 | 摧毁场上所有敌人 | `Enemy.KillAll` |
+| ⛑️ 头盔 | 一段时间无敌 | `Player.AddShield` |
+| 🧱 铁锹 | 基地围墙临时变钢墙,到期恢复 | `BaseGuard.Protect` |
+| ⏰ 时钟 | 冻结所有敌人一段时间 | `Enemy.Freeze` |
+
+> `BonusSpawner.bonusSprites` 数组索引 = `BonusType` 枚举值(命/星/雷/盔/锹/钟);须按**功能**摆放而非按 `Bonus_N` 文件序号。铁锹需场景内有 `BaseGuard`(拖入钢墙/砖墙预制体),否则该道具静默无效。
+
+## 🚚 敌人坦克类型
+
+`Enemy` 用 `maxHp` / `bulletSpeed` / `scoreValue` 区分类型,击中由 `Enemy.Hit` 扣血(装甲坦克需多发才死)。把各类型 prefab 拖进 `Born.enemyPrefablist` 即随机刷新:
+
+| 类型 | 移动 | 血量 | 分值 | 特点 |
+| --- | --- | --- | --- | --- |
+| 基础(SmallEnemy) | 普通 | 1 | 1 | 标准坦克 |
+| 大型(BigEnemy) | 普通 | 1 | 1 | 标准坦克 |
+| 快速(FastEnemy) | 快 | 1 | 2 | 速度 5,机动性强 |
+| 装甲(ArmorEnemy) | 慢 | **4** | 4 | 需击中 4 次才摧毁 |
+
+> 四种类型分别取用 `Enemys.bmp` 图集的 4 组切片(类型 0/1/2/3)。想加"强化坦克"(快速子弹),复制 FastEnemy 把 `bulletSpeed` 设为如 16 即可。
+
+---
+
 ## 👥 双人模式约定
 
 ### 生命与分数共享
@@ -373,8 +410,8 @@ SampleScene(战斗)
 ## 🔭 后续可扩展方向
 
 - [ ] **多关卡系统**:每关卡独立的 `MapGrid` 与难度起步阈值
-- [ ] **道具系统**:补齐道具逻辑(无敌星、加速、炸雷、升级)
-- [ ] **多种敌方坦克类型**:BigEnemy / SmallEnemy 加差异化(不同 `moveSpeed` / `fireCooldown` 分级)
+- [x] **道具系统**:6 种原版道具(加命 / 升级 / 手雷 / 头盔 / 铁锹 / 时钟)已实现
+- [x] **多种敌方坦克类型**:基础 / 快速 / 装甲(多血)等类型已实现,可继续加"强化坦克"
 - [ ] **路径距离选目标**:目标选择改用 A\* 实际路径长度替代曼哈顿直线距离,隔墙时分工更精准
 - [ ] **墙体 HP**:铁墙 HP=∞,砖墙 HP=1 — 让 AI 知道一击必破
 - [ ] **存档与排行榜**:PlayerPrefs 记录最高分/最远关卡

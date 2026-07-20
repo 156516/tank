@@ -15,12 +15,23 @@ public class Enemy : MonoBehaviour
     public float moveSpeed = 3;
     public float fireCooldown = 1.5f;
 
+    // ---- 坦克类型差异(不同 prefab 配不同值)----
+    public int maxHp = 1;          // 生命值:装甲坦克设 4,普通坦克 1(需被击中多次才死)
+    public float bulletSpeed = 0f; // >0 时覆盖子弹速度(强化/快速坦克的子弹更快)
+    public int scoreValue = 1;     // 击杀该坦克的得分
+    private int hp;
+
     // 满级基准值(Awake 时从上面的 Inspector 值捕获,之后不再改动)
     private float maxMoveSpeed;
     private float minFireCooldown;
 
     private SpriteRenderer sr;
     public Sprite[] tankSprite;
+    // 移动动画第 2 帧(履带):与 tankSprite 同索引;留空则静态不动画
+    public Sprite[] tankSpriteMoving;
+    public float treadAnimInterval = 0.12f;   // 履带换帧间隔(秒)
+    private int treadFrame;                    // 0 = 静态帧,1 = 移动帧
+    private float treadTimer;
     public GameObject bulletPrefab;
     public GameObject explosionPrefab;
 
@@ -52,6 +63,7 @@ public class Enemy : MonoBehaviour
         sr = GetComponent<SpriteRenderer>();
         h = 0f;
         v = -1f;
+        hp = Mathf.Max(1, maxHp);
 
         // 捕获满级基准,并按「当前难度」立即算出生效值,保证刚生成的敌人也符合当前强度
         maxMoveSpeed = moveSpeed;
@@ -80,11 +92,15 @@ public class Enemy : MonoBehaviour
         // 每帧刷新难度:已存活的敌人也会随时间逐渐变快、开火变密
         ApplyDifficulty();
 
-        fireTimer += Time.deltaTime;
-        if (fireTimer >= fireCooldown)
+        // 时钟道具:冻结期间不开火(移动在 Move 里同样被拦)
+        if (!IsFrozen)
         {
-            Fire();
-            fireTimer = 0f;
+            fireTimer += Time.deltaTime;
+            if (fireTimer >= fireCooldown)
+            {
+                Fire();
+                fireTimer = 0f;
+            }
         }
 
         if (target == null || (target.gameObject != null && !target.gameObject.activeInHierarchy))
@@ -96,7 +112,33 @@ public class Enemy : MonoBehaviour
 
     void FixedUpdate()
     {
+        // 时钟道具:冻结期间静止不动
+        if (IsFrozen)
+        {
+            treadFrame = 0;
+            treadTimer = 0f;
+            ApplySprite();
+            return;
+        }
         Move();
+    }
+
+    // ---- 时钟道具:全体敌人冻结 ----
+    private static float frozenUntil = 0f;
+    public static bool IsFrozen { get { return Time.timeSinceLevelLoad < frozenUntil; } }
+    public static void Freeze(float seconds) { frozenUntil = Time.timeSinceLevelLoad + seconds; }
+    public static void ResetFreeze() { frozenUntil = 0f; }
+
+    // ---- 手雷道具:摧毁场上所有敌人 ----
+    public static void KillAll()
+    {
+        GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
+        for (int i = 0; i < enemies.Length; i++)
+        {
+            if (enemies[i] == null) continue;
+            Enemy en = enemies[i].GetComponent<Enemy>();
+            if (en != null) en.DieMethod();
+        }
     }
 
     private void AcquireTarget()
@@ -147,8 +189,13 @@ public class Enemy : MonoBehaviour
 
     private void Fire()
     {
-        Instantiate(bulletPrefab, transform.position,
+        GameObject b = Instantiate(bulletPrefab, transform.position,
             Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
+        if (bulletSpeed > 0f && b != null)
+        {
+            Bullet bb = b.GetComponent<Bullet>();
+            if (bb != null) bb.moveSpeed = bulletSpeed;   // 强化坦克:更快的子弹
+        }
     }
 
     private void Move()
@@ -171,7 +218,9 @@ public class Enemy : MonoBehaviour
         {
             if (!DecideDirection())
             {
-                // 决策要求停步(面前是砖墙需先开火 / 转向后仍撞墙)→ 本帧不移动
+                // 决策要求停步(面前是砖墙需先开火 / 转向后仍撞墙)→ 本帧不移动,履带停
+                treadTimer = 0f;
+                treadFrame = 0;
                 ApplySprite();
                 return;
             }
@@ -192,6 +241,10 @@ public class Enemy : MonoBehaviour
         {
             transform.position = pos + (delta / dist) * step;
         }
+
+        // 履带动画:移动中按间隔交替第 2 帧
+        treadTimer += Time.fixedDeltaTime;
+        if (treadTimer >= treadAnimInterval) { treadTimer = 0f; treadFrame ^= 1; }
 
         ApplySprite();
     }
@@ -466,17 +519,41 @@ public class Enemy : MonoBehaviour
 
     private void ApplySprite()
     {
-        if (h > 0) { sr.sprite = tankSprite[1]; bullectEulerAngles = new Vector3(0, 0, -90); }
-        else if (h < 0) { sr.sprite = tankSprite[3]; bullectEulerAngles = new Vector3(0, 0, 90); }
-        else if (v > 0) { sr.sprite = tankSprite[0]; bullectEulerAngles = new Vector3(0, 0, 0); }
-        else if (v < 0) { sr.sprite = tankSprite[2]; bullectEulerAngles = new Vector3(0, 0, -180); }
+        int dir = -1;
+        if (h > 0) { dir = 1; bullectEulerAngles = new Vector3(0, 0, -90); }
+        else if (h < 0) { dir = 3; bullectEulerAngles = new Vector3(0, 0, 90); }
+        else if (v > 0) { dir = 0; bullectEulerAngles = new Vector3(0, 0, 0); }
+        else if (v < 0) { dir = 2; bullectEulerAngles = new Vector3(0, 0, -180); }
+        if (dir >= 0) sr.sprite = TreadSprite(dir);
     }
 
-    private void DieMethod()
+    // 选取当前方向要显示的帧:移动帧就绪且处于交替相位时用第 2 帧,否则用静态帧
+    private Sprite TreadSprite(int dir)
+    {
+        if (treadFrame == 1 && tankSpriteMoving != null &&
+            dir < tankSpriteMoving.Length && tankSpriteMoving[dir] != null)
+        {
+            return tankSpriteMoving[dir];
+        }
+        return tankSprite[dir];
+    }
+
+    // 被玩家子弹击中:扣血,血尽才死(装甲坦克需多次击中)
+    public void Hit(int killerPlayer)
+    {
+        killerPlayerNumber = killerPlayer;
+        hp--;
+        if (hp <= 0)
+        {
+            DieMethod();
+        }
+    }
+
+    public void DieMethod()
     {
         if (PlayerManager.Instance != null)
         {
-            PlayerManager.Instance.AddScore(killerPlayerNumber);
+            PlayerManager.Instance.AddScore(killerPlayerNumber, scoreValue);
         }
         Instantiate(explosionPrefab, transform.position, transform.rotation);
         Destroy(this.gameObject);

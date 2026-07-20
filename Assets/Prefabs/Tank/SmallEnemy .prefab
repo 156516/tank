@@ -177,14 +177,18 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   moveSpeed: 4
-  killerPlayerNumber: 1
   fireCooldown: 1.5
-  detectRange: 1
-  maxWallCost: 1
   tankSprite:
   - {fileID: 21300008, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
   - {fileID: 21300024, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
   - {fileID: 21300040, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
+  - {fileID: 21300056, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
+  tankSpriteMoving:
+  - {fileID: 21300010, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
+  - {fileID: 21300026, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
+  - {fileID: 21300042, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
   - {fileID: 21300058, guid: 3348c3d1a93bce84fba2264f6a8458f4, type: 3}
+  treadAnimInterval: 0.12
   bulletPrefab: {fileID: 7467894289850518987, guid: 82b204d679b436d40866d2b52873ac65, type: 3}
   explosionPrefab: {fileID: 6137299851721532300, guid: 84c25dc7d4c527c4584c0d10b64b26fa, type: 3}
+  killerPlayerNumber: 1

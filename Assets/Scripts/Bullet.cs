@@ -35,6 +35,8 @@ public class Bullet : MonoBehaviour
                     {
                         enemy.killerPlayerNumber = shootingPlayerNumber;
                     }
+                    // 用 SendMessage 的目的是调 DieMethod,但 target 可能没挂 Enemy 组件;
+                    // 不过 Enemy 必然存在(否则不会 tag = Enemy),所以 SendMessage OK
                     collision.SendMessage("DieMethod");
                     Destroy(this.gameObject);
                 }
@@ -51,9 +53,12 @@ public class Bullet : MonoBehaviour
                 Destroy(this.gameObject);
                 break;
             case "Barrier":
+                // 注意:Boundary AirBarrier 的 tag 也是 Barrier,但没挂 Barrier 组件,
+                // 用 GetComponent 防御性调用 — 没组件就静默不响
                 if (isPlayerBullet)
                 {
-                    collision.SendMessage("PlayAudio");
+                    Barrier barrier = collision.GetComponent<Barrier>();
+                    if (barrier != null) barrier.PlayAudio();
                 }
                 Destroy(this.gameObject);
                 break;

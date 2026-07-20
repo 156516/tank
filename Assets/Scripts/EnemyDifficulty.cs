@@ -33,4 +33,11 @@ public static class EnemyDifficulty
     {
         return Mathf.Lerp(minCooldown * StartCooldownMul, minCooldown, Factor01);
     }
+
+    // 躲子弹熟练度 0 → 1:开局为 0(完全不躲),随时间提升。
+    // Enemy 用它缩放「子弹反应距离」:熟练度越高越早发现来袭子弹、越能躲开。
+    public static float DodgeSkill01
+    {
+        get { return Factor01; }
+    }
 }

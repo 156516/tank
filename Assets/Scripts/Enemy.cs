@@ -206,6 +206,18 @@ public class Enemy : MonoBehaviour
         Vector3 c = MapGrid.CellToWorld(myCell);
         transform.position = new Vector3(c.x, c.y, transform.position.z);
 
+        // 最高优先级:检测来袭玩家子弹,能躲就侧身让开弹道
+        Vector2Int dodgeDir;
+        if (TryGetDodgeDirection(myCell, out dodgeDir))
+        {
+            h = dodgeDir.x;
+            v = dodgeDir.y;
+            targetCell = myCell + dodgeDir;
+            hasTarget = true;
+            pathRecalcTimer = pathRecalcInterval;   // 躲完下帧立即重算路径回到航线
+            return true;
+        }
+
         // 期望方向:优先 A* path,其次朝 Heart 主轴,再次随机
         Vector2Int desired = Vector2Int.zero;
         Vector2Int next;
@@ -287,6 +299,80 @@ public class Enemy : MonoBehaviour
         if (n == 1) return new Vector2Int(0, -1);
         if (n == 2) return new Vector2Int(1, 0);
         return new Vector2Int(-1, 0);
+    }
+
+    // ---- 躲避子弹 ----
+    private const float DodgeReactRange = 6f;      // 满级(熟练度=1)时的最大反应距离(世界单位≈格数);实际按熟练度缩放
+    private const float DodgeCorridorHalf = 0.5f;  // 判定"在同一条弹道上"的横向半宽
+
+    // 检测来袭玩家子弹:若有子弹正沿弹道朝自己飞来,返回一个垂直于弹道、指向可走空地的逃离方向。
+    private bool TryGetDodgeDirection(Vector2Int myCell, out Vector2Int dodgeDir)
+    {
+        dodgeDir = Vector2Int.zero;
+
+        // 反应距离随躲避熟练度增长:开局熟练度=0 → 距离=0 → 完全不躲;随时间越躲越远、越灵。
+        float reactRange = DodgeReactRange * EnemyDifficulty.DodgeSkill01;
+        if (reactRange < 0.5f) return false;
+
+        Vector2 myPos = transform.position;
+
+        Bullet[] bullets = Object.FindObjectsOfType<Bullet>();
+        bool threat = false;
+        float nearest = float.MaxValue;
+        Vector2 threatBulletDir = Vector2.zero;
+        Vector2 threatLateral = Vector2.zero;
+
+        for (int i = 0; i < bullets.Length; i++)
+        {
+            Bullet b = bullets[i];
+            if (b == null || !b.isPlayerBullet) continue;   // 敌方子弹伤不到自己,只躲玩家子弹
+
+            Vector2 dir = QuantizeDir(b.transform.up);       // 子弹前进方向(量化到四轴)
+            Vector2 toEnemy = myPos - (Vector2)b.transform.position;
+
+            float forward = Vector2.Dot(toEnemy, dir);       // 沿弹道方向的距离(需 >0 = 在子弹前方)
+            if (forward <= 0f || forward > reactRange) continue;
+
+            Vector2 lateral = toEnemy - forward * dir;       // 相对弹道中心的横向偏移
+            if (lateral.magnitude > DodgeCorridorHalf) continue;  // 不在同一条弹道走廊内
+
+            if (forward < nearest)
+            {
+                nearest = forward;
+                threatBulletDir = dir;
+                threatLateral = lateral;
+                threat = true;
+            }
+        }
+
+        if (!threat) return false;
+
+        // 逃离方向 = 垂直于弹道;两侧都试,优先朝已偏出的一侧,选可走空地
+        Vector2Int perp = PerpendicularOf(threatBulletDir);
+        Vector2Int optA = perp;
+        Vector2Int optB = new Vector2Int(-perp.x, -perp.y);
+        if (Vector2.Dot(threatLateral, new Vector2(perp.x, perp.y)) < 0f)
+        {
+            Vector2Int tmp = optA; optA = optB; optB = tmp;
+        }
+
+        if (MapGrid.GetCellType(myCell + optA) == MapGrid.Walkable) { dodgeDir = optA; return true; }
+        if (MapGrid.GetCellType(myCell + optB) == MapGrid.Walkable) { dodgeDir = optB; return true; }
+        return false;   // 两侧都堵,躲不了,交给正常逻辑
+    }
+
+    // 把任意向量量化到最接近的四轴单位向量
+    private static Vector2 QuantizeDir(Vector2 v)
+    {
+        if (Mathf.Abs(v.x) >= Mathf.Abs(v.y)) return new Vector2(Mathf.Sign(v.x), 0f);
+        return new Vector2(0f, Mathf.Sign(v.y));
+    }
+
+    // 弹道水平 → 上下逃;弹道垂直 → 左右逃
+    private static Vector2Int PerpendicularOf(Vector2 bulletDir)
+    {
+        if (Mathf.Abs(bulletDir.x) > Mathf.Abs(bulletDir.y)) return new Vector2Int(0, 1);
+        return new Vector2Int(1, 0);
     }
 
     // 朝 path 期望方向转 90°(否则随机)

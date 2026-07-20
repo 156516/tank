@@ -9,9 +9,8 @@ public class PlayerManager : MonoBehaviour
     // 共享生命池:任意一个玩家死亡都消耗 1,两位玩家都用这一条血
     public int lifeValue = 6;
 
-    // 分数两位玩家分开记录
-    public int playerScore1 = 0;
-    public int playerScore2 = 0;
+    // 总分:任意一位玩家击杀敌人都累加到这里,两位玩家共用一个分数
+    public int score = 0;
 
     // 是否处于「刚死 / 待重生」状态
     public bool isDead;
@@ -28,9 +27,8 @@ public class PlayerManager : MonoBehaviour
     // 玩家 2 的实际预制体(Player 2.prefab),Born 会用它在重生时实例化
     public GameObject player2Prefab;
 
-    // UI 引用 —— 血条共享为 1 个,分数各 1 个
-    public Text playerScoreText1;
-    public Text playerScoreText2;
+    // UI 引用 —— 血条 / 总分都各 1 个,两位玩家共用
+    public Text playerScoreText;
     public Text playerLifeValueText;
     public GameObject isDefeatUI;
 
@@ -69,8 +67,7 @@ public class PlayerManager : MonoBehaviour
 
         if (isDead) Recover();
 
-        if (playerScoreText1 != null) playerScoreText1.text = playerScore1.ToString();
-        if (playerScoreText2 != null) playerScoreText2.text = playerScore2.ToString();
+        if (playerScoreText != null) playerScoreText.text = score.ToString();
         if (playerLifeValueText != null) playerLifeValueText.text = lifeValue.ToString();
     }
 
@@ -81,11 +78,10 @@ public class PlayerManager : MonoBehaviour
         isDead = true;
     }
 
-    // 击杀得分
+    // 击杀得分:任何一位玩家击杀敌人都 +1,playerNumber 参数保留以兼容 Enemy.cs 的调用
     public void AddScore(int playerNumber)
     {
-        if (playerNumber == 2) playerScore2++;
-        else playerScore1++;
+        score++;
     }
 
     // 基地被毁 / 其他原因直接判负

@@ -235,15 +235,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   lifeValue: 6
-  playerScore1: 0
-  playerScore2: 0
+  score: 0
   isDead: 0
   isDefeat: 0
   player1Born: {fileID: 3932541018496167799, guid: 098d13d8d1cd19f43a3d23c9ad61f446, type: 3}
   player2Born: {fileID: 3932541018496167799, guid: 098d13d8d1cd19f43a3d23c9ad61f446, type: 3}
   player2Prefab: {fileID: 3932541018496167799, guid: 0f721bb629fb572ee41ab1dffe79afa6, type: 3}
-  playerScoreText1: {fileID: 894392590}
-  playerScoreText2: {fileID: 0}
+  playerScoreText: {fileID: 894392590}
   playerLifeValueText: {fileID: 7815668}
   isDefeatUI: {fileID: 1627724620}
 --- !u!4 &58880384

@@ -57,6 +57,10 @@ public static class MapGrid
                 for (int cy = 0; cy < Rows; cy++)
                     cellType[cx, cy] = 0;
         }
+        // 关键:刚 Instantiate 的碰撞体默认还没同步进物理世界(autoSyncTransforms=false),
+        // 不先同步,下面的 OverlapPoint 会查不到任何障碍 → 整张网格被误判为空地。
+        Physics2D.SyncTransforms();
+
         for (int cx = 0; cx < Cols; cx++)
         {
             for (int cy = 0; cy < Rows; cy++)
@@ -65,10 +69,11 @@ public static class MapGrid
                 Collider2D col = Physics2D.OverlapPoint(pos);
                 if (col == null) continue;
                 string tag = col.tag;
+                // 注意:实例化后名字带 "(Clone)" 后缀,必须用 StartsWith 而不是 == "River"
                 if (tag == "Barrier") cellType[cx, cy] = PermanentBlock;
                 else if (tag == "Wall") cellType[cx, cy] = BreakableWall;
                 else if (tag == "Heart") cellType[cx, cy] = HeartCell;
-                else if (col.gameObject.name == "River") cellType[cx, cy] = PermanentBlock;
+                else if (col.gameObject.name.StartsWith("River")) cellType[cx, cy] = PermanentBlock;
                 // Enemy / Player 当作可走(它们会移动)
             }
         }
@@ -86,6 +91,15 @@ public static class MapGrid
         }
     }
 
+    // 读出某格类型(供外部在 IsWalkable 之外做更细的判断,比如区分砖墙 vs 永久阻挡)
+    // 没初始化或越界都视为永久阻挡(防御性)
+    public static int GetCellType(Vector2Int cell)
+    {
+        if (!initialized) return PermanentBlock;
+        if (cell.x < 0 || cell.x >= Cols || cell.y < 0 || cell.y >= Rows) return PermanentBlock;
+        return cellType[cell.x, cell.y];
+    }
+
     // 该格子是否可走:
     // - allowBreakable=true 时,砖墙视为"可走但要打碎"(会在走之前被子弹清除)
     public static bool IsWalkable(Vector2Int cell, bool allowBreakable)
@@ -95,7 +109,25 @@ public static class MapGrid
         int type = cellType[cell.x, cell.y];
         if (type == PermanentBlock) return false;
         if (type == BreakableWall) return allowBreakable;
+        // HeartCell 视为可走:保证 A* 能一路(必要时炸墙)逼近基地。
+        // 真正"不进入基地、停下开火"的行为由 Enemy.DecideDirection 处理,不在这里拦。
         return true;
+    }
+
+    // 扫描场上所有 tag=Enemy 的 GameObject,返回它们当前所在格的集合。
+    // 供 Enemy 在 RecalculatePath 时作为 banned,让同伙主动错开,避免挤一起卡死。
+    public static HashSet<Vector2Int> GetEnemyOccupiedCells()
+    {
+        var set = new HashSet<Vector2Int>();
+        var enemies = GameObject.FindGameObjectsWithTag("Enemy");
+        for (int i = 0; i < enemies.Length; i++)
+        {
+            if (enemies[i] != null && enemies[i].activeInHierarchy)
+            {
+                set.Add(WorldToCell(enemies[i].transform.position));
+            }
+        }
+        return set;
     }
 
     // DFS 路径:从 start 到 end,返回格点列表(含 end,不含 start),失败 null

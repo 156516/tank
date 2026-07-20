@@ -2,49 +2,84 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-// 简化的敌人:自动开火,只朝 Heart 走。
+// 敌人:A* 路径规划 + grid-aligned 走向 + cell-based 撞墙检测
+// "完全进入一个格子才转弯" 的实施:
+//   - tank 不在 cell 中央 -> 朝 cell 中央走 (朝 -off), 不重新决策方向
+//   - tank 在 cell 中央 -> 重新决定方向 (基于 A* path) + 走之前看 target cell (cell-based 转 90° / 开火)
 public class Enemy : MonoBehaviour
 {
+    // 这两个 Inspector 值现在表示「满级(最强)」时的数值:
+    //   moveSpeed    = 满级最快移动速度
+    //   fireCooldown = 满级最短开火冷却
+    // 实际生效值由 EnemyDifficulty 随时间从「弱」插值到这里(见 Awake / Update)。
     public float moveSpeed = 3;
     public float fireCooldown = 1.5f;
 
-    // 贴图 / 预制体
+    // 满级基准值(Awake 时从上面的 Inspector 值捕获,之后不再改动)
+    private float maxMoveSpeed;
+    private float minFireCooldown;
+
     private SpriteRenderer sr;
-    public Sprite[] tankSprite;          // 上、下、左、右
+    public Sprite[] tankSprite;
     public GameObject bulletPrefab;
     public GameObject explosionPrefab;
 
-    // 击杀本敌人的玩家编号(Bullet 在击中时写入)
     public int killerPlayerNumber = 1;
 
-    // 移动方向(强制 axis-aligned)
     private Vector3 bullectEulerAngles;
     private float h;
     private float v = -1;
 
-    // 开火冷却
     private float fireTimer;
-
-    // 当前要冲的目标(由 Awake / Update 锁定 Heart)
     private Transform target;
 
-    // 上次碰到墙后多久(用于撞墙 90 度转)
-    private float collideCooldown;
+    // ---- A* 路径规划 ----
+    private List<Vector2Int> currentPath;
+    private float pathRecalcInterval = 0.5f;
+    private float pathRecalcTimer;
+
+    // 目标切换迟滞:新目标要比当前目标近至少这么多格才切换,避免在两个目标间反复横跳
+    private const int TargetSwitchMargin = 3;
+
+    // ---- 格子对齐移动 ----
+    // 关键:坦克一次只朝「一个相邻格的中心」直线走,到达后精确吸附到格心,
+    // 只有站在格心时才重新决策方向。这样跨轴坐标恒为整数,不会累计漂移,撞墙检测才准确。
+    private Vector2Int targetCell;   // 当前正在前往的相邻格
+    private bool hasTarget;          // 是否有正在前往的目标格
 
     void Awake()
     {
         sr = GetComponent<SpriteRenderer>();
-        // 起始 axis-aligned 朝下,不斜走
         h = 0f;
         v = -1f;
+
+        // 捕获满级基准,并按「当前难度」立即算出生效值,保证刚生成的敌人也符合当前强度
+        maxMoveSpeed = moveSpeed;
+        minFireCooldown = fireCooldown;
+        ApplyDifficulty();
+
         fireTimer = Random.Range(0f, fireCooldown);
-        collideCooldown = 0f;
+        pathRecalcTimer = pathRecalcInterval;
+        currentPath = null;
+        hasTarget = false;
+
         AcquireTarget();
+        RecalculatePath();
+        ApplySprite();
+    }
+
+    // 按当前游戏时间刷新有效移动速度 / 开火冷却(随时间由弱变强)
+    private void ApplyDifficulty()
+    {
+        moveSpeed = EnemyDifficulty.MoveSpeed(maxMoveSpeed);
+        fireCooldown = EnemyDifficulty.FireCooldown(minFireCooldown);
     }
 
     void Update()
     {
-        // 自动开火:timer 到点就开,不看前方是什么
+        // 每帧刷新难度:已存活的敌人也会随时间逐渐变快、开火变密
+        ApplyDifficulty();
+
         fireTimer += Time.deltaTime;
         if (fireTimer >= fireCooldown)
         {
@@ -52,25 +87,62 @@ public class Enemy : MonoBehaviour
             fireTimer = 0f;
         }
 
-        // Heart 可能被毁或动态生成;每 0.5s 重新锁定
         if (target == null || (target.gameObject != null && !target.gameObject.activeInHierarchy))
         {
             AcquireTarget();
+            if (currentPath != null) currentPath.Clear();
         }
     }
 
-    // 找 Heart 作为唯一目标
+    void FixedUpdate()
+    {
+        Move();
+    }
+
     private void AcquireTarget()
     {
-        GameObject go = GameObject.FindGameObjectWithTag("Heart");
-        if (go != null && go.activeInHierarchy)
+        // 协作分工:在「基地 + 所有存活玩家」中,选格子曼哈顿距离最近的作为进攻目标。
+        // → 离基地近的敌人去打基地,离某玩家近的去打那个玩家,自然分散不扎堆。
+        Vector2Int myCell = MapGrid.WorldToCell(transform.position);
+        Transform best = null;
+        int bestDist = int.MaxValue;
+
+        // 候选 1:基地
+        GameObject heart = GameObject.FindGameObjectWithTag("Heart");
+        if (heart != null && heart.activeInHierarchy)
         {
-            target = go.transform;
+            best = heart.transform;
+            bestDist = ManhattanTo(myCell, heart.transform.position);
         }
-        else
+
+        // 候选 2:所有存活玩家(tag = Tank)
+        GameObject[] players = GameObject.FindGameObjectsWithTag("Tank");
+        for (int i = 0; i < players.Length; i++)
         {
-            target = null;
+            if (players[i] == null || !players[i].activeInHierarchy) continue;
+            int d = ManhattanTo(myCell, players[i].transform.position);
+            if (d < bestDist)
+            {
+                bestDist = d;
+                best = players[i].transform;
+            }
         }
+
+        // 迟滞:当前目标仍有效且新目标没有「明显更近」时,保持当前目标,避免来回抖动切换
+        if (target != null && target.gameObject != null && target.gameObject.activeInHierarchy)
+        {
+            int curDist = ManhattanTo(myCell, target.position);
+            if (bestDist + TargetSwitchMargin >= curDist) return;
+        }
+
+        target = best;
+    }
+
+    // 以格子为单位的曼哈顿距离(与坦克贴格移动一致,比欧氏距离更贴近实际步数)
+    private int ManhattanTo(Vector2Int fromCell, Vector3 worldPos)
+    {
+        Vector2Int c = MapGrid.WorldToCell(worldPos);
+        return Mathf.Abs(c.x - fromCell.x) + Mathf.Abs(c.y - fromCell.y);
     }
 
     private void Fire()
@@ -79,76 +151,230 @@ public class Enemy : MonoBehaviour
             Quaternion.Euler(transform.eulerAngles + bullectEulerAngles));
     }
 
-    void FixedUpdate()
+    private void Move()
     {
-        Move();
+        // 1. 路径需要时重算(只更新 currentPath,不打断当前正在走的这一格)
+        pathRecalcTimer += Time.fixedDeltaTime;
+        if (pathRecalcTimer >= pathRecalcInterval ||
+            currentPath == null ||
+            currentPath.Count == 0)
+        {
+            pathRecalcTimer = 0f;
+            AcquireTarget();      // 随玩家移动重新分工:离谁近就改打谁(带迟滞)
+            RecalculatePath();
+        }
+
+        float step = moveSpeed * Time.fixedDeltaTime;
+
+        // 2. 没有正在前往的目标格 → 站在格心重新决策方向
+        if (!hasTarget)
+        {
+            if (!DecideDirection())
+            {
+                // 决策要求停步(面前是砖墙需先开火 / 转向后仍撞墙)→ 本帧不移动
+                ApplySprite();
+                return;
+            }
+        }
+
+        // 3. 朝目标格中心直线移动(targetCell 必为轴向相邻,移动纯粹沿单轴,跨轴坐标恒定)
+        Vector3 tw = MapGrid.CellToWorld(targetCell);
+        Vector3 pos = transform.position;
+        Vector3 delta = tw - pos;
+        float dist = delta.magnitude;
+        if (dist <= step || dist < 1e-4f)
+        {
+            // 到达 → 精确吸附到格心,消除累计漂移;清目标,下一帧再决策
+            transform.position = new Vector3(tw.x, tw.y, pos.z);
+            hasTarget = false;
+        }
+        else
+        {
+            transform.position = pos + (delta / dist) * step;
+        }
+
+        ApplySprite();
     }
 
-    // 朝 Heart 走;撞铁墙 / 河就 90 度随机转
-    private void Move()
+    // 站在格心决策下一步方向:
+    //   返回 true  → 已设定 targetCell,本帧继续移动
+    //   返回 false → 本帧应停步(砖墙待炸 / 无路可走)
+    private bool DecideDirection()
+    {
+        Vector2Int myCell = MapGrid.WorldToCell(transform.position);
+        // 先精确吸附到当前格心,清除历史漂移,保证后续撞墙检测基于真实格子
+        Vector3 c = MapGrid.CellToWorld(myCell);
+        transform.position = new Vector3(c.x, c.y, transform.position.z);
+
+        // 期望方向:优先 A* path,其次朝 Heart 主轴,再次随机
+        Vector2Int desired = Vector2Int.zero;
+        Vector2Int next;
+        if (TryGetNextStep(out next))
+        {
+            desired = new Vector2Int(next.x - myCell.x, next.y - myCell.y);
+        }
+        else if (target != null)
+        {
+            Vector3 diff = target.position - transform.position;
+            if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
+                desired = new Vector2Int((int)Mathf.Sign(diff.x), 0);
+            else
+                desired = new Vector2Int(0, (int)Mathf.Sign(diff.y));
+        }
+        if (desired == Vector2Int.zero)
+        {
+            desired = RandomDir();
+        }
+
+        // path 期望方向(撞墙转 90° 时用来决定往哪一侧转)
+        int pathDx = desired.x, pathDy = desired.y;
+
+        // 应用方向(供 sprite / 开火朝向)
+        h = desired.x;
+        v = desired.y;
+
+        // 撞墙检测:查目标格类型
+        Vector2Int tgt = myCell + desired;
+        int tType = MapGrid.GetCellType(tgt);
+
+        if (tType == MapGrid.HeartCell)
+        {
+            // 已抵达基地旁 → 面向基地开火并停步,绝不进入(避免左右乱晃)
+            if (fireTimer >= fireCooldown)
+            {
+                Fire();
+                fireTimer = 0f;
+            }
+            return false;
+        }
+
+        if (tType == MapGrid.PermanentBlock)
+        {
+            // 铁块 / 河流(永久阻挡)→ 朝 path 期望方向转 90°
+            PickPerpendicularDirection(pathDx, pathDy);
+            pathRecalcTimer = pathRecalcInterval;   // 下帧强制重算路径
+            desired = new Vector2Int((int)h, (int)v);
+            tgt = myCell + desired;
+            tType = MapGrid.GetCellType(tgt);
+            if (tType == MapGrid.PermanentBlock || tType == MapGrid.HeartCell)
+            {
+                // 转 90° 后仍是阻挡/基地 → 本帧停步,避免钻墙
+                return false;
+            }
+        }
+
+        if (tType == MapGrid.BreakableWall)
+        {
+            // 砖墙 → 冷却好了就开火炸墙,本帧停步等待(不逐帧刷子弹)
+            if (fireTimer >= fireCooldown)
+            {
+                Fire();
+                fireTimer = 0f;
+            }
+            return false;
+        }
+
+        // 目标格可走 → 锁定,开始朝它移动
+        targetCell = tgt;
+        hasTarget = true;
+        return true;
+    }
+
+    private Vector2Int RandomDir()
+    {
+        int n = Random.Range(0, 4);
+        if (n == 0) return new Vector2Int(0, 1);
+        if (n == 1) return new Vector2Int(0, -1);
+        if (n == 2) return new Vector2Int(1, 0);
+        return new Vector2Int(-1, 0);
+    }
+
+    // 朝 path 期望方向转 90°(否则随机)
+    private void PickPerpendicularDirection(int pathDx, int pathDy)
+    {
+        if (h != 0f)
+        {
+            if (pathDy > 0) v = 1f;
+            else if (pathDy < 0) v = -1f;
+            else v = Random.value > 0.5f ? 1f : -1f;
+            h = 0f;
+        }
+        else if (v != 0f)
+        {
+            if (pathDx > 0) h = 1f;
+            else if (pathDx < 0) h = -1f;
+            else h = Random.value > 0.5f ? 1f : -1f;
+            v = 0f;
+        }
+        else
+        {
+            int n = Random.Range(0, 4);
+            if (n == 0) { v = 1f;  h = 0f; }
+            else if (n == 1) { v = -1f; h = 0f; }
+            else if (n == 2) { h = 1f;  v = 0f; }
+            else             { h = -1f; v = 0f; }
+        }
+    }
+
+    // A* 重算到 Heart 的路径;banned = 同伙当前所在格让他们错开
+    private void RecalculatePath()
     {
         if (target == null)
         {
-            // 没有目标:随机走
-            ApplyRandomDirection();
+            currentPath = null;
+            return;
+        }
+        Vector2Int start = MapGrid.WorldToCell(transform.position);
+        Vector2Int end = MapGrid.WorldToCell(target.position);
+        if (!MapGrid.IsWalkable(end, false))
+        {
+            end = GetApproachCell(end);
+        }
+        if (start == end)
+        {
+            currentPath = new List<Vector2Int> { end };
             return;
         }
 
-        // 朝向 Heart:选主轴方向(axis-aligned)
-        Vector3 diff = target.position - transform.position;
-        if (Mathf.Abs(diff.x) >= Mathf.Abs(diff.y))
+        HashSet<Vector2Int> banned = MapGrid.GetEnemyOccupiedCells();
+        currentPath = MapGrid.FindPathPreferOpen(start, end, banned, out _);
+        if (currentPath == null)
         {
-            h = Mathf.Sign(diff.x);
-            v = 0;
+            currentPath = null;
         }
-        else
-        {
-            v = Mathf.Sign(diff.y);
-            h = 0;
-        }
+    }
 
-        // 撞到铁墙 / 边界空气墙 / 河(撞前检测,不被嵌入):90 度随机转
-        // 短冷却避免同帧反复触发
-        if (collideCooldown <= 0f)
+    private Vector2Int GetApproachCell(Vector2Int goal)
+    {
+        Vector2Int[] dirs = {
+            new Vector2Int(1, 0), new Vector2Int(-1, 0),
+            new Vector2Int(0, 1), new Vector2Int(0, -1)
+        };
+        for (int i = 0; i < dirs.Length; i++)
         {
-            Vector3 dir = new Vector3(h, v, 0);
-            RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, 0.55f);
-            if (hit.collider != null && IsBlocking(hit.collider))
+            Vector2Int nb = goal + dirs[i];
+            if (MapGrid.IsWalkable(nb, false)) return nb;
+        }
+        return goal;
+    }
+
+    private bool TryGetNextStep(out Vector2Int next)
+    {
+        next = default(Vector2Int);
+        if (currentPath == null || currentPath.Count == 0) return false;
+        Vector2Int myCellCoord = MapGrid.WorldToCell(transform.position);
+        for (int i = 0; i < currentPath.Count; i++)
+        {
+            Vector2Int c = currentPath[i];
+            int dx = Mathf.Abs(c.x - myCellCoord.x);
+            int dy = Mathf.Abs(c.y - myCellCoord.y);
+            if (dx + dy == 1)
             {
-                // 旋转 90 度(若水平则改为垂直随机方向,反之亦然)
-                if (h != 0) { v = Random.value > 0.5f ? 1 : -1; h = 0; }
-                else        { h = Random.value > 0.5f ? 1 : -1; v = 0; }
-                collideCooldown = 0.15f;
+                next = c;
+                return true;
             }
         }
-        else
-        {
-            collideCooldown -= Time.fixedDeltaTime;
-        }
-
-        ApplySprite();
-
-        // axis-aligned 防御
-        if (h != 0 && v != 0) v = 0;
-        if (h != 0) transform.Translate(Vector3.right * h * moveSpeed * Time.fixedDeltaTime, Space.World);
-        else if (v != 0) transform.Translate(Vector3.up * v * moveSpeed * Time.fixedDeltaTime, Space.World);
-    }
-
-    private void ApplyRandomDirection()
-    {
-        int n = Random.Range(0, 4);
-        if (n == 0) { v = 1f; h = 0f; }
-        else if (n == 1) { v = -1f; h = 0f; }
-        else if (n == 2) { v = 0f; h = 1f; }
-        else { v = 0f; h = -1f; }
-        ApplySprite();
-    }
-
-    private bool IsBlocking(Collider2D col)
-    {
-        string tag = col.tag;
-        if (tag == "Barrier" || tag == "Heart") return true;
-        if (col.gameObject.name == "River") return true;
+        currentPath = null;
         return false;
     }
 

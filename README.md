@@ -2,7 +2,7 @@
 
 一款基于 **Unity 2D** 制作的经典坦克大战复刻游戏。玩家控制己方坦克,在随机生成的地图中击毁不断来袭的敌方坦克,同时保护我方基地(Heart),坚持到最后一刻。
 
-支持 **单人 / 双人本地合作** 两种模式:单人模式使用 `WASD + Space`;双人模式下一位玩家沿用 `WASD + Space`,另一位使用方向键 + `Enter`,**共享同一座基地、同一段 6 命生命池与同一份总分**。**AI 难度随游戏时间自动升级**(每 30 秒 +1 级,属性最高 +140%)。
+支持 **单人 / 双人本地合作** 两种模式:单人模式使用 `WASD + Space`;双人模式下一位玩家沿用 `WASD + Space`,另一位使用方向键 + `Enter`,**共享同一座基地、同一段 6 命生命池与同一份总分**。敌人采用 **A\* 寻路 + 贴格移动**,会**协作分工**(离基地近的打基地、离玩家近的追玩家),并且**难度随游戏时间平滑增强**(开局较弱,约 2 分钟内逐渐达到满级)。
 
 > 致敬 1985 年 FC/NES 上的经典《Battle City》——本项目以现代 Unity 引擎重新演绎。
 
@@ -39,7 +39,7 @@
 | --- | --- |
 | 🚗 **玩家控制** | WASD / 方向键移动,空格 / Enter 发射子弹;同时按两方向时以最后按下的方向为准 |
 | 👥 **单人 / 双人本地合作** | 双人模式:Player1 用 WASD+Space,Player2 用方向键+Enter,共享同一张地图与基地;任一玩家有命时游戏继续 |
-| 🤖 **敌人 AI** | 随机方向切换、定时开火、坦克之间不会重叠 |
+| 🤖 **敌人 AI** | A\* 寻路绕开障碍、贴格移动不撞墙、按距离协作分工、随时间由弱变强 |
 | 🗺️ **随机地图生成** | 启动时自动铺设围墙、障碍物、草地、水域 |
 | 🛡️ **无敌保护** | 玩家出生 / 重生后 3 秒内免疫伤害 |
 | 💥 **粒子爆炸** | 坦克被摧毁时生成爆炸特效 |
@@ -94,7 +94,7 @@
 | 5 | 草地 | 装饰用 |
 | 6 | 钢墙 | 地图边界 |
 
-地图以 `(-11, -9)` 到 `(11, 9)` 的 22 × 18 网格为范围,坦克与障碍物均在此区域内随机分布。
+地图以 `(-11, -9)` 到 `(11, 9)` 的 **23 × 19** 网格为范围,坦克与障碍物均在此区域内随机分布。
 
 ---
 
@@ -200,10 +200,10 @@ tank/
 | `Player.cs` | 玩家坦克移动、转向、射击、无敌时间控制;键位可配置 `moveKeys[4] + fireKey`,由 `Born.ApplyKeyMap` 根据玩家编号注入;`AttackMethod` 创建子弹后立即写 `isPlayerBullet + shootingPlayerNumber` |
 | `Born.cs` | 出生点:1 秒后孵化坦克后销毁自身;**已有 `playerPrefab` 与 `player2Prefab` 两个字段**(无需单独建 Born 2.prefab);`ApplyKeyMap` 根据 `playerNumber` 注入 WASD+Space / 方向键+Enter |
 | `Bullet.cs` | 子弹飞行、碰撞判定(对敌人 / 玩家 / 砖墙 / 铁墙 / Heart / Barrier);击中砖墙时调用 `MapGrid.MarkWallBroken` 让敌人重算路径;GetComponent 防御性 PlayAudio |
-| `MapGrid.cs` | 静态网格:23×19 格子化的地图表示;`Rebuild` 用 Physics2D.OverlapPoint 扫描;`FindPath / FindPathPreferOpen` 提供 DFS 单源最短;`CountBreakableAlongPath` 估算破墙代价 |
+| `MapGrid.cs` | 静态网格:23×19 格子化地图;`Rebuild` 先 `Physics2D.SyncTransforms()` 再用 `OverlapPoint` 扫描(否则刚实例化的碰撞体查不到);`FindPathPreferOpen` 提供 **A\*** 寻路(先走空地,不行才破墙,破墙 cost=2);河流按 `name.StartsWith("River")` 识别 |
 | `MapCreation.cs` | 启动时一次性随机生成地图;`MapGrid.Rebuild()` 在 InitMap 末尾调用;若 `twoPlayerMode=true` 在 `(-2,-8)` 与 `(2,-8)` 用同一份 Born 模板摆放两位玩家的出生点,运行时把 `player2Prefab` 注入 |
-| `Enemy.cs` | 敌方 AI(见下方"AI 子系统详解"):含角色分配、路径规划、目标锁定、难度递增、地图感知、时间窗口 ban 等 |
-| `EnemyCoordination.cs` | 静态协调层:`TryClaim / Release / GetClaimCount`;每个 Player 最多被 2 名敌人围攻,Heart 最多被 4 个同时冲 |
+| `Enemy.cs` | 敌方 AI(见下方"AI 子系统详解"):A\* 寻路 + 贴格移动、按距离协作选目标(基地/玩家)、撞墙转向/砖墙开火、随时间由弱变强 |
+| `EnemyDifficulty.cs` | 静态难度曲线:以 `Time.timeSinceLevelLoad` 为时钟,把敌人移动速度/开火冷却从「弱」在 `RampSeconds` 内线性插值到 Inspector 满级值 |
 | `PlayerManager.cs` | 单例管理器:**共享生命池 `lifeValue = 6`** 与 **总分 `score`**,所有玩家共用;失败判定:`heart 被毁`(TriggerDefeat)或双方都无命,3 秒后回主菜单 |
 | `Heart.cs` | 基地逻辑:被击中即切换破碎贴图,调用 `PlayerManager.TriggerDefeat()` |
 | `Barrier.cs` | 障碍物被击中时播放音效;`GetComponent<Barrier>` 检查避免 no receiver 警告 |
@@ -248,87 +248,72 @@ if (h != 0 && v != 0)
 ### 整体决策链
 
 ```
-Update 每帧(fireTimer 累积):
-  ├─ 攻击冷却到点 -> IsBreakableWallInFront() ? 开火 : 不开火
-  ├─ 每 2 秒同步难度(PlayerManager.currentLevel)
-  ├─ 若 HeartChaser:扫描周围 4 格玩家 → opportunisticKill
-  └─ 每 0.5 秒 Retarget(选目标 + TryClaim 锁定)
+Update 每帧:
+  ├─ ApplyDifficulty():按当前游戏时间刷新移动速度 / 开火冷却(随时间变强)
+  ├─ 攻击冷却到点 → 开火
+  └─ 目标失效(玩家/基地被毁)→ 立即重新选目标
 
-FixedUpdate:
-  └─ MoveMethod: 撞砖墙 → PlanPath;撞铁墙 → PlanPath;走到当前节点 → 下一个
-
-PlanPath:
-  ├─ MapGrid.Rebuild
-  ├─ CollectNearbyEnemyBans(自己最近 5 格 + 周围 4 格队友当前位置)
-  ├─ FindPathPreferOpen (绕过 → 不行才破墙)
-  ├─ 若破墙路径 cost > maxWallCost(默认 1) → 拒绝
-  └─ 走 fallback(朝目标直线)
+FixedUpdate → Move():
+  ├─ 每 0.5s:AcquireTarget()(协作分工) + RecalculatePath()(A* 重算)
+  ├─ 不在格心 → 朝当前目标格中心直线走(不改方向)
+  └─ 到达格心 → 吸附到中心,再 DecideDirection() 决策下一步
 ```
 
-### 寻路:`MapGrid.FindPathPreferOpen` (DFS)
+### 网格地图:`MapGrid`
 
-- **第一轮**:不开砖墙,只走空地;`allowBreakable=false`
-- **第二轮**:找不到才允许破墙;`allowBreakable=true`
-- 用 `out usedBreakable` 通知调用方最终路径是否依赖破砖
-- `CountBreakableAlongPath` 进一步评估破墙代价
+- 把场景离散成 **23 × 19** 格,`Rebuild()` 用 `Physics2D.OverlapPoint` 逐格扫描物体类型。
+- **关键修复**:`Rebuild()` 在扫描前先调用 `Physics2D.SyncTransforms()`——刚 `Instantiate` 的碰撞体默认还没同步进物理世界,不同步会导致整张网格被误判为空地(河流/铁块全查不到)。
+- 河流预制体实例化后名字带 `(Clone)` 后缀,用 `name.StartsWith("River")` 识别(不能用 `== "River"`)。
+- 格子类型:`Walkable(0) / PermanentBlock(1) 铁墙·河流 / BreakableWall(2) 砖墙 / HeartCell(3) 基地`。
 
-### 协调:`EnemyCoordination` 静态锁定
+### 寻路:`MapGrid.FindPathPreferOpen`(A\*)
 
-- `MaxLockOnHeart = 4`、`MaxLockOnPlayer = 2`
-- 同一个目标被锁满后,新敌人被迫换目标(打另一玩家)或降级为随机走
-- 避免"5 个敌人卡在玩家脸上围观"
+- **A\*** 算法,`f = g + h`,`h` 为曼哈顿距离(admissible)。
+- **第一轮**:砖墙视为阻挡,只走空地(`allowBreakable=false`)。
+- **第二轮**:走不通才允许破墙(`allowBreakable=true`,破墙 `cost=2`,避免为微优化乱拆墙)。
+- 每次重算时把**其它敌人当前所在格**加入 `banned` 集(`GetEnemyOccupiedCells`),让同伙自动错开、天然分散。
 
-### 多敌人分散
+### 贴格移动(核心:不撞墙的关键)
 
-每个 enemy 跑 DFS 前 **ban 集**包含:
-1. **自己最近 5 个走过的格子**(`recentCells` 队列) — 避免来回跳头
-2. **周围 4 格队友的当前位置** — 避免走同一条路径
+敌人**一次只朝一个相邻格的中心直线移动**,到达后**精确吸附到格心**,**只有站在格心时才重新决策方向**(`DecideDirection`)。
 
-由于每个 enemy 的 ban 集不同,DFS 自动选出独立路径,天然分散。
+> 这样跨轴坐标恒为整数,不会因连续位移产生累计漂移,撞墙检测(基于 `WorldToCell` 的格子)才始终准确。早期"坦克半个身子卡进墙里、脱离规划路径"的问题正源于缺少这一对齐逻辑。
 
-### 角色化敌人
+### 撞墙 / 目标格反应(`DecideDirection`)
 
-- **HeartChaser**(默认 50%)— 一心冲 Heart,但**路上有玩家**时会"绕心刺人"临时切去打
-- **PlayerChaser**(默认 35%)— 优先追最近的玩家,被锁满则退而求 Heart
-- **RandomWalker**(默认 15%)— 自由晃荡,扰乱视线
+| 前方目标格 | 反应 |
+| --- | --- |
+| **铁墙 / 河流**(PermanentBlock) | 朝路径期望方向转 90°;若转后仍是阻挡则本帧停步,避免钻墙 |
+| **砖墙**(BreakableWall) | 冷却好了就开火炸墙,本帧停步等待(不逐帧刷子弹) |
+| **基地**(HeartCell) | 面向基地开火、停步不进入 —— 消除"到基地旁左右乱晃" |
+| **空地**(Walkable) | 锁定为目标格,开始移动 |
 
-### 地图物体分类(DetectFront)
+### 协作分工:按距离选目标(`AcquireTarget`)
 
-| 前方物体 | tag / 名称 | 反应 |
+- 候选 = **基地 + 所有存活玩家**(玩家 tag = `Tank`,基地 tag = `Heart`)。
+- 选**格子曼哈顿距离最近**者作为进攻目标 → 离基地近的打基地,离某玩家近的追那个玩家,敌人自然分散不扎堆。
+- **迟滞**(`TargetSwitchMargin = 3`):新目标要比当前目标近至少 3 格才切换,避免两目标距离相近时反复横跳。
+- 每 0.5s 随路径重算刷新一次;玩家移动后会重新分工。
+
+### 难度递增:`EnemyDifficulty`
+
+以 `Time.timeSinceLevelLoad`(本局经过秒数)为时钟,在 `RampSeconds` 内把敌人从"弱"线性插值到"满级";**已存活的敌人也随时间变强**(`Update` 每帧刷新),重开一局自动重置。
+
+| 参数 | 默认 | 含义 |
 | --- | --- | --- |
-| **可碎砖墙** | tag = "Wall" | 开火打穿,同时让 PlanPath 重新规划绕路 |
-| **铁墙 / 边界空气墙** | tag = "Barrier" | 立刻 PlanPath 换路线 |
-| **河流** | GameObject.name == "River" | 同上(永久阻挡) |
-| **草地** | GameObject.name == "Grass" | 装饰,直接穿过 |
-| **Heart** | tag = "Heart" | 撞就结束游戏(Enemy 不主动撞) |
-| **队友坦克** | tag = "Enemy" | PlanPath 重绕 |
+| `RampSeconds` | 120 s | 从开局到满级所需时间,越大越平缓 |
+| `StartSpeedMul` | 0.55 | 开局移动速度 = 满级 × 0.55(更慢) |
+| `StartCooldownMul` | 2.5 | 开局开火冷却 = 满级 × 2.5(打得更慢) |
+| 满级值 | — | 即 Enemy 预制体 Inspector 里的 `moveSpeed` / `fireCooldown` |
 
-### 轴对齐(axis-aligned)
-
-敌人**绝不斜走**:
-- `Awake` 显式 `h=0, v=-1`
-- `MoveMethod` 移动前加 `if (h != 0 && v != 0) v = 0;`
-- `if/else if` 互斥移动
-
-### 难度递增
+### Inspector 调参(Enemy.prefab)
 
 | 字段 | 默认 | 含义 |
 | --- | --- | --- |
-| `upgradeInterval` | 30 秒 | 多久升一级 |
-| `difficultyStep` | 0.10 / 级 | 每级 +10% 难度倍率 |
-| `maxDifficultyMultiplier` | 2.4 | 难度上限 |
-| 实际效果 | — | `moveSpeed` × 1.0~1.6,`fireCooldown` / 1.0~1.5,`opportunisticRadius` × 1.0~1.6 |
+| `moveSpeed` | 3 | **满级(最快)**移动速度 |
+| `fireCooldown` | 1.5 s | **满级(最短)**开火间隔 |
 
-### Inspector 调参
-
-| Enemy.prefab 字段 | 默认 | 含义 |
-| --- | --- | --- |
-| `fireCooldown` | 1.5 s | 攻击间隔 |
-| `detectRange` | 1.0 | 前方预判距离 |
-| `opportunisticRadius` | 3.0 | HeartChaser 路上遇玩家的范围 |
-| `heartChaserChance` | 0.5 | 心机者比例 |
-| `playerChaserShareInNonHearts` | 0.7 | 非心机者中追击者比例 |
-| `maxWallCost` | 1 | 一条路径允许破墙数量上限 |
+> 想整体降低难度:调小 `EnemyDifficulty.StartSpeedMul`、调大 `StartCooldownMul` 或 `RampSeconds`。
 
 ---
 
@@ -369,8 +354,8 @@ SampleScene(战斗)
 
 - [ ] **多关卡系统**:每关卡独立的 `MapGrid` 与难度起步阈值
 - [ ] **道具系统**:补齐道具逻辑(无敌星、加速、炸雷、升级)
-- [ ] **多种敌方坦克类型**:BigEnemy / SmallEnemy 加差异化 (`MaxLockOnPlayer` 调整,FireCooldown 分级)
-- [ ] **真实 BFS 最优路径**:把 DFS 替成 BFS,获得真正最短绕路
+- [ ] **多种敌方坦克类型**:BigEnemy / SmallEnemy 加差异化(不同 `moveSpeed` / `fireCooldown` 分级)
+- [ ] **路径距离选目标**:目标选择改用 A\* 实际路径长度替代曼哈顿直线距离,隔墙时分工更精准
 - [ ] **墙体 HP**:铁墙 HP=∞,砖墙 HP=1 — 让 AI 知道一击必破
 - [ ] **存档与排行榜**:PlayerPrefs 记录最高分/最远关卡
 - [ ] **关卡动画**:升 level 时屏幕闪"Lv UP!"提示

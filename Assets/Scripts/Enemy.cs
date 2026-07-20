@@ -66,6 +66,9 @@ public class Enemy : MonoBehaviour
     private void Awake()
     {
         sr = GetComponent<SpriteRenderer>();
+        // 显式 axis-aligned 起始状态:水平方向 = 0,垂直方向 = -1(向下)
+        h = 0f;
+        v = -1f;
         // 让 AI 一出生就开始动,而不是等 4 秒
         nextChangeTime = Time.time + Random.Range(0.3f, 1.0f);
         // 略微错开开火时机,避免多只敌人同时开火
@@ -275,10 +278,14 @@ public class Enemy : MonoBehaviour
             }
         }
 
-        // 真正移动
+        // ——axis-aligned 防御——
+        // 坦克只能走直线,任何 h 和 v 同时非零的情况都强制投影为水平
+        if (h != 0 && v != 0) v = 0;
+
+        // 真正移动(显式 axis-aligned:同一帧只能沿一个轴)
         if (h != 0)
             transform.Translate(Vector3.right * h * moveSpeed * Time.fixedDeltaTime, Space.World);
-        if (v != 0)
+        else if (v != 0)
             transform.Translate(Vector3.up * v * moveSpeed * Time.fixedDeltaTime, Space.World);
     }
 

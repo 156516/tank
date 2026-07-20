@@ -71,10 +71,13 @@ public class MapCreation : MonoBehaviour
             }
         }
 
-        // 敌人出生点
+        // 敌人出生点:单人 2 处(左/右),双人 3 处(左/中/右)
         CreateItem(item[3], new Vector3(-10, 8, 0), Quaternion.identity);
-        CreateItem(item[3], new Vector3(0, 8, 0), Quaternion.identity);
         CreateItem(item[3], new Vector3(10, 8, 0), Quaternion.identity);
+        if (twoPlayerMode)
+        {
+            CreateItem(item[3], new Vector3(0, 8, 0), Quaternion.identity);
+        }
 
         InvokeRepeating("CreateEnemy", 4, 5);
 
@@ -136,19 +139,21 @@ public class MapCreation : MonoBehaviour
 
     private void CreateEnemy()
     {
-        int num = Random.Range(0, 3);
-        Vector3 EnemyPos = new Vector3();
+        // 无并发上限,持续刷新。刷怪点:单人 2 处(左/右),双人 3 处(左/中/右)
+        int spawnCount = twoPlayerMode ? 3 : 2;
+        int num = Random.Range(0, spawnCount);
+        Vector3 EnemyPos;
         if (num == 0)
         {
-            EnemyPos = new Vector3(-10, 8, 0);
+            EnemyPos = new Vector3(-10, 8, 0);   // 左
         }
         else if (num == 1)
         {
-            EnemyPos = new Vector3(0, 8, 0);
+            EnemyPos = new Vector3(10, 8, 0);    // 右
         }
-        else if (num == 2)
+        else
         {
-            EnemyPos = new Vector3(10, 8, 0);
+            EnemyPos = new Vector3(0, 8, 0);     // 中(仅双人)
         }
         CreateItem(item[3], EnemyPos, Quaternion.identity);
     }

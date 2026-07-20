@@ -2,7 +2,7 @@
 
 一款基于 **Unity 2D** 制作的经典坦克大战复刻游戏。玩家控制己方坦克,在随机生成的地图中击毁不断来袭的敌方坦克,同时保护我方基地(Heart),坚持到最后一刻。
 
-支持 **单人 / 双人本地合作** 两种模式:单人模式使用 `WASD + Space`;双人模式下一位玩家沿用 `WASD + Space`,另一位使用方向键 + `Enter`,**共享同一座基地、同一段 6 命生命池与同一份总分**。敌人采用 **A\* 寻路 + 贴格移动**,会**协作分工**(离基地近的打基地、离玩家近的追玩家),并且**难度随游戏时间平滑增强**(开局较弱,约 2 分钟内逐渐达到满级)。
+支持 **单人 / 双人本地合作** 两种模式:单人模式使用 `WASD + Space`;双人模式下一位玩家沿用 `WASD + Space`,另一位使用方向键 + `Enter`,**共享同一座基地与同一份总分**。生命与刷怪按模式区分:**单人 3 命、从 2 处刷敌**;**双人共享 6 命、从 3 处刷敌**。敌人采用 **A\* 寻路 + 贴格移动**,会**协作分工**(离基地近的打基地、离玩家近的追玩家),并且**难度随游戏时间平滑增强**(开局较弱,约 2 分钟内逐渐达到满级)。
 
 > 致敬 1985 年 FC/NES 上的经典《Battle City》——本项目以现代 Unity 引擎重新演绎。
 
@@ -201,10 +201,10 @@ tank/
 | `Born.cs` | 出生点:1 秒后孵化坦克后销毁自身;**已有 `playerPrefab` 与 `player2Prefab` 两个字段**(无需单独建 Born 2.prefab);`ApplyKeyMap` 根据 `playerNumber` 注入 WASD+Space / 方向键+Enter |
 | `Bullet.cs` | 子弹飞行、碰撞判定(对敌人 / 玩家 / 砖墙 / 铁墙 / Heart / Barrier);击中砖墙时调用 `MapGrid.MarkWallBroken` 让敌人重算路径;GetComponent 防御性 PlayAudio |
 | `MapGrid.cs` | 静态网格:23×19 格子化地图;`Rebuild` 先 `Physics2D.SyncTransforms()` 再用 `OverlapPoint` 扫描(否则刚实例化的碰撞体查不到);`FindPathPreferOpen` 提供 **A\*** 寻路(先走空地,不行才破墙,破墙 cost=2);河流按 `name.StartsWith("River")` 识别 |
-| `MapCreation.cs` | 启动时一次性随机生成地图;`MapGrid.Rebuild()` 在 InitMap 末尾调用;若 `twoPlayerMode=true` 在 `(-2,-8)` 与 `(2,-8)` 用同一份 Born 模板摆放两位玩家的出生点,运行时把 `player2Prefab` 注入 |
+| `MapCreation.cs` | 启动时一次性随机生成地图;`MapGrid.Rebuild()` 在 InitMap 末尾调用;敌人刷怪点按模式区分(单人 2 处 / 双人 3 处),无并发上限;若 `twoPlayerMode=true` 在 `(-2,-8)` 与 `(2,-8)` 用同一份 Born 模板摆放两位玩家的出生点,运行时把 `player2Prefab` 注入 |
 | `Enemy.cs` | 敌方 AI(见下方"AI 子系统详解"):A\* 寻路 + 贴格移动、按距离协作选目标(基地/玩家)、撞墙转向/砖墙开火、随时间由弱变强 |
 | `EnemyDifficulty.cs` | 静态难度曲线:以 `Time.timeSinceLevelLoad` 为时钟,把敌人移动速度/开火冷却从「弱」在 `RampSeconds` 内线性插值到 Inspector 满级值 |
-| `PlayerManager.cs` | 单例管理器:**共享生命池 `lifeValue = 6`** 与 **总分 `score`**,所有玩家共用;失败判定:`heart 被毁`(TriggerDefeat)或双方都无命,3 秒后回主菜单 |
+| `PlayerManager.cs` | 单例管理器:**共享生命池**(单人 3 命 / 双人 6 命,`Start` 里按模式设定)与 **总分 `score`**,所有玩家共用;失败判定:`heart 被毁`(TriggerDefeat)或双方都无命,3 秒后回主菜单 |
 | `Heart.cs` | 基地逻辑:被击中即切换破碎贴图,调用 `PlayerManager.TriggerDefeat()` |
 | `Barrier.cs` | 障碍物被击中时播放音效;`GetComponent<Barrier>` 检查避免 no receiver 警告 |
 | `Explosion.cs` | 爆炸特效,0.167 秒后自动销毁 |
@@ -237,7 +237,7 @@ if (h != 0 && v != 0)
 
 **子弹差异化碰撞**(`Bullet.cs`):玩家子弹只对敌人 / Heart / 可破坏墙生效;敌方子弹只对玩家生效。玩家子弹击中敌人前会写入 `enemy.killerPlayerNumber = shootingPlayerNumber`,这样击杀分记到正确的玩家身上。
 
-**敌人刷新**(`MapCreation.cs`):每 5 秒在顶部三处随机位置刷新一只敌人(`InvokeRepeating("CreateEnemy", 4, 5)`);双人模式下复用同一份 Born.prefab 在 `(2, -8)` 摆放 Player 2 的出生点,并把 `player2Prefab` 注入到该 Born 实例上。
+**敌人刷新**(`MapCreation.cs`):每 5 秒刷新一只敌人(`InvokeRepeating("CreateEnemy", 4, 5)`),**无并发上限**;刷怪点按模式区分——**单人 2 处**(左 `(-10,8)` / 右 `(10,8)`),**双人 3 处**(再加中间 `(0,8)`),开局初始出生点同样遵循此规则。双人模式下复用同一份 Born.prefab 在 `(2, -8)` 摆放 Player 2 的出生点,并把 `player2Prefab` 注入到该 Born 实例上。
 
 **双人模式下失败判定**(`PlayerManager.cs`):任一玩家还有命时,另一方无命不会立刻结束游戏;只有当 *双方都无命* 或基地被毁时,才弹出失败 UI 并延迟 3 秒返回主菜单。
 
@@ -323,10 +323,13 @@ FixedUpdate → Move():
 
 | 资源 | 单人模式 | 双人模式 |
 | --- | --- | --- |
-| 生命值 | 6 命 | **同一份 6 命**(共享) |
+| 生命值 | **3 命** | **同一份 6 命**(共享) |
+| 敌人刷怪点 | **2 处**(左 / 右) | **3 处**(左 / 中 / 右) |
 | 总分 | 0 | **同一份 0 分**(共享) |
 | 玩家初始位置 | (-2, -8) | P1=(-2,-8),P2=(2,-8) |
 | 失败条件 | lifeValue < 0 或 Heart 毁 | 同上,但**任一方还有命时游戏继续** |
+
+> 生命数与刷怪点数量可在 Inspector 调:`PlayerManager.singlePlayerLife / twoPlayerLife`;刷怪点数量由 `MapCreation.twoPlayerMode` 驱动(单人 2 处 / 双人 3 处)。
 
 ### 主菜单流程
 

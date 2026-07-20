@@ -6,8 +6,13 @@ using UnityEngine.SceneManagement;
 
 public class PlayerManager : MonoBehaviour
 {
-    // 共享生命池:任意一个玩家死亡都消耗 1,两位玩家都用这一条血
+    // 共享生命池:任意一个玩家死亡都消耗 1,两位玩家都用这一条血。
+    // 实际初始值在 Start() 里按单/双人模式设定(见 singlePlayerLife / twoPlayerLife)。
     public int lifeValue = 6;
+
+    // 单人 / 双人模式各自的初始生命(单人更少,难度更低)
+    public int singlePlayerLife = 3;
+    public int twoPlayerLife = 6;
 
     // 总分:任意一位玩家击杀敌人都累加到这里,两位玩家共用一个分数
     public int score = 0;
@@ -56,6 +61,20 @@ public class PlayerManager : MonoBehaviour
     {
         instance = this;
         SyncTwoPlayerRefs();
+    }
+
+    private void Start()
+    {
+        // 在所有 Awake 之后读取最终模式(MapCreation.twoPlayerMode 此时已确定),按模式设初始生命
+        lifeValue = ResolveTwoPlayerMode() ? twoPlayerLife : singlePlayerLife;
+    }
+
+    // 解析当前是否双人模式:优先取 MapCreation 的最终值,退而取 MenuOptions
+    private bool ResolveTwoPlayerMode()
+    {
+        MapCreation mc = FindObjectOfType<MapCreation>();
+        if (mc != null) return mc.twoPlayerMode;
+        return MenuOptions.isTwoPlayerMode;
     }
 
     private void SyncTwoPlayerRefs()

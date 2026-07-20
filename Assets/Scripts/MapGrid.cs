@@ -104,15 +104,22 @@ public static class MapGrid
 
     public static List<Vector2Int> FindPath(Vector2Int start, Vector2Int end, bool allowBreakable)
     {
+        return FindPath(start, end, allowBreakable, null);
+    }
+
+    // 重载:banned 集合中的格子视为 PermanentBlock(用于让 enemy 互相错开走)
+    public static List<Vector2Int> FindPath(Vector2Int start, Vector2Int end, bool allowBreakable,
+                                            HashSet<Vector2Int> banned)
+    {
         if (!initialized) return null;
         if (start == end) return new List<Vector2Int> { end };
-        if (!IsWalkable(end, allowBreakable)) return null;
+        if (!IsWalkableWithBan(end, allowBreakable, banned)) return null;
 
         bool[,] visited = new bool[Cols, Rows];
         List<Vector2Int> path = new List<Vector2Int>();
-        if (DFS(start, end, allowBreakable, visited, path, 0))
+        if (DFS(start, end, allowBreakable, banned, visited, path, 0))
         {
-            return path;  // path 是 [end, ..., start+1] → 反转为 [start+1, ..., end]
+            return path;
         }
         return null;
     }
@@ -122,7 +129,8 @@ public static class MapGrid
     };
 
     private static bool DFS(Vector2Int cur, Vector2Int end, bool allowBreakable,
-                            bool[,] visited, List<Vector2Int> path, int depth)
+                            HashSet<Vector2Int> banned, bool[,] visited,
+                            List<Vector2Int> path, int depth)
     {
         if (depth > MaxDepth) return false;
         if (cur == end)
@@ -136,13 +144,20 @@ public static class MapGrid
         for (int i = 0; i < FourDirs.Length; i++)
         {
             Vector2Int next = cur + FourDirs[i];
-            if (!IsWalkable(next, allowBreakable)) continue;
-            if (DFS(next, end, allowBreakable, visited, path, depth + 1))
+            if (!IsWalkableWithBan(next, allowBreakable, banned)) continue;
+            if (DFS(next, end, allowBreakable, banned, visited, path, depth + 1))
             {
                 path.Add(cur);
                 return true;
             }
         }
         return false;
+    }
+
+    private static bool IsWalkableWithBan(Vector2Int cell, bool allowBreakable, HashSet<Vector2Int> banned)
+    {
+        if (!IsWalkable(cell, allowBreakable)) return false;
+        if (banned != null && banned.Contains(cell)) return false;
+        return true;
     }
 }

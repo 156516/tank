@@ -384,11 +384,13 @@ public class Enemy : MonoBehaviour
 
         // 重建地图网格(砖墙状态可能改变)
         MapGrid.Rebuild();
+        // 收集附近敌人位置作为本 enemy 局部 ban,让多 enemy 自然分散到不同路径
+        HashSet<Vector2Int> banned = CollectNearbyEnemyBans();
 
         Vector2Int start = MapGrid.WorldToCell(transform.position);
         Vector2Int end = MapGrid.WorldToCell(currentTarget.position);
         // allowBreakable=true:遇到砖墙也按"可走"对待(打碎就过)
-        pathPoints = MapGrid.FindPath(start, end, allowBreakable: true);
+        pathPoints = MapGrid.FindPath(start, end, allowBreakable: true, banned);
         pathIndex = 0;
 
         if (pathPoints != null && pathPoints.Count > 0)
@@ -411,6 +413,24 @@ public class Enemy : MonoBehaviour
             }
             ApplySprite();
         }
+    }
+
+    // 收集附近敌人位置作为本 enemy 暂时拒绝走的格子。
+    // 这样多个 enemy 撞同一目标时,各自 DFS 出不同路径,自然分散。
+    private HashSet<Vector2Int> CollectNearbyEnemyBans()
+    {
+        HashSet<Vector2Int> banned = new HashSet<Vector2Int>();
+        GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
+        Vector3 selfPos = transform.position;
+        for (int i = 0; i < enemies.Length; i++)
+        {
+            GameObject e = enemies[i];
+            if (e == null || e == this.gameObject) continue;
+            float sqr = (e.transform.position - selfPos).sqrMagnitude;
+            if (sqr > 16f) continue;  // 4 格以内才 ban
+            banned.Add(MapGrid.WorldToCell(e.transform.position));
+        }
+        return banned;
     }
 
     // 朝目标格子转方向(axis-aligned)

@@ -113,12 +113,18 @@ public class Enemy : MonoBehaviour
 
     void Update()
     {
-        // 攻击冷却
+        // 攻击冷却 + 仅在前方有可碎砖墙时才开火
+        // 铁墙 / 河流 / 边界空气墙 不可碎,子弹打上去只会消失,毫无意义
         fireTimer += Time.deltaTime;
         if (fireTimer >= fireCooldown)
         {
-            AttackMethod();
-            fireTimer = 0f;
+            if (IsBreakableWallInFront())
+            {
+                AttackMethod();
+                fireTimer = 0f;
+            }
+            // 没的可碎墙时:不重置 fireTimer,下次到点再看,
+            // 避免被铁墙堵住时一直空开炮(浪费时间)
         }
 
         // 每 2 秒同步一次难度,等级变化时升级自身属性
@@ -477,6 +483,15 @@ public class Enemy : MonoBehaviour
             h = 0;
         }
         ApplySprite();
+    }
+
+    // 仅检测前方是否有可碎砖墙(tag = "Wall")。用于 AttackMethod 触发判定。
+    private bool IsBreakableWallInFront()
+    {
+        Vector3 dir = new Vector3(h, v, 0);
+        if (dir == Vector3.zero) return false;
+        RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, detectRange);
+        return hit.collider != null && hit.collider.CompareTag("Wall");
     }
 
     // 详细的"前方物体分类":用 tag 区分 Wall/Barrier/Heart/Enemy,

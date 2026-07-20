@@ -2,7 +2,7 @@
 
 一款基于 **Unity 2D** 制作的经典坦克大战复刻游戏。玩家控制己方坦克,在随机生成的地图中击毁不断来袭的敌方坦克,同时保护我方基地(Heart),坚持到最后一刻。
 
-支持 **单人 / 双人本地合作** 两种模式:单人模式使用 `WASD + Space`;双人模式下一位玩家沿用 `WASD + Space`,另一位使用方向键 + `Enter`,共享同一张地图和同一座基地。
+支持 **单人 / 双人本地合作** 两种模式:单人模式使用 `WASD + Space`;双人模式下一位玩家沿用 `WASD + Space`,另一位使用方向键 + `Enter`,**共享同一座基地、同一段 6 命生命池与同一份总分**。**AI 难度随游戏时间自动升级**(每 30 秒 +1 级,属性最高 +140%)。
 
 > 致敬 1985 年 FC/NES 上的经典《Battle City》——本项目以现代 Unity 引擎重新演绎。
 
@@ -197,16 +197,19 @@ tank/
 
 | 脚本 | 职责 |
 | --- | --- |
-| `Player.cs` | 玩家坦克移动、转向、射击、无敌时间控制;键位可配置:`moveKeys[4]` + `fireKey`,由 `Born.ApplyKeyMap` 根据玩家编号注入 |
-| `Enemy.cs` | 敌方 AI 坦克随机移动、定时射击、坦克间碰撞避让;击杀时记入对应玩家分数(`killerPlayerNumber`) |
-| `Bullet.cs` | 子弹飞行、碰撞判定(对敌人 / 玩家 / 墙体 / Heart 的差异化处理);携带 `shootingPlayerNumber` 用于正确记分 |
-| `MapCreation.cs` | 启动时一次性随机生成地图;周期性在三个刷新点孵化敌人;若 `twoPlayerMode=true` 复用 `item[3]` Born 模板在 `(-2,-8)` 与 `(2,-8)` 摆放两位玩家的出生点,运行时把 `player2Prefab` 字段注入 |
-| `PlayerManager.cs` | 单例管理器:分别管理两位玩家的生命与分数、独立重生与失败判定(双方都无命或基地被毁才判负);Player 2 重生时也会向 Born 实例注入 `player2Prefab` |
-| `Born.cs` | 出生点:1 秒后孵化坦克后销毁自身;已有 `playerPrefab` 与 `player2Prefab` 两个字段,`ApplyKeyMap` 根据 `playerNumber` 注入 WASD+Space / 方向键+Enter,playerNumber=2 时优先使用 `player2Prefab` |
-| `Heart.cs` | 基地逻辑:被击中即切换破碎贴图,调用 `PlayerManager.TriggerDefeat()` 进入失败 |
-| `Barrier.cs` | 障碍物被击中时播放音效 |
+| `Player.cs` | 玩家坦克移动、转向、射击、无敌时间控制;键位可配置 `moveKeys[4] + fireKey`,由 `Born.ApplyKeyMap` 根据玩家编号注入;`AttackMethod` 创建子弹后立即写 `isPlayerBullet + shootingPlayerNumber` |
+| `Born.cs` | 出生点:1 秒后孵化坦克后销毁自身;**已有 `playerPrefab` 与 `player2Prefab` 两个字段**(无需单独建 Born 2.prefab);`ApplyKeyMap` 根据 `playerNumber` 注入 WASD+Space / 方向键+Enter |
+| `Bullet.cs` | 子弹飞行、碰撞判定(对敌人 / 玩家 / 砖墙 / 铁墙 / Heart / Barrier);击中砖墙时调用 `MapGrid.MarkWallBroken` 让敌人重算路径;GetComponent 防御性 PlayAudio |
+| `MapGrid.cs` | 静态网格:23×19 格子化的地图表示;`Rebuild` 用 Physics2D.OverlapPoint 扫描;`FindPath / FindPathPreferOpen` 提供 DFS 单源最短;`CountBreakableAlongPath` 估算破墙代价 |
+| `MapCreation.cs` | 启动时一次性随机生成地图;`MapGrid.Rebuild()` 在 InitMap 末尾调用;若 `twoPlayerMode=true` 在 `(-2,-8)` 与 `(2,-8)` 用同一份 Born 模板摆放两位玩家的出生点,运行时把 `player2Prefab` 注入 |
+| `Enemy.cs` | 敌方 AI(见下方"AI 子系统详解"):含角色分配、路径规划、目标锁定、难度递增、地图感知、时间窗口 ban 等 |
+| `EnemyCoordination.cs` | 静态协调层:`TryClaim / Release / GetClaimCount`;每个 Player 最多被 2 名敌人围攻,Heart 最多被 4 个同时冲 |
+| `PlayerManager.cs` | 单例管理器:**共享生命池 `lifeValue = 6`** 与 **总分 `score`**,所有玩家共用;失败判定:`heart 被毁`(TriggerDefeat)或双方都无命,3 秒后回主菜单 |
+| `Heart.cs` | 基地逻辑:被击中即切换破碎贴图,调用 `PlayerManager.TriggerDefeat()` |
+| `Barrier.cs` | 障碍物被击中时播放音效;`GetComponent<Barrier>` 检查避免 no receiver 警告 |
 | `Explosion.cs` | 爆炸特效,0.167 秒后自动销毁 |
-| `Option.cs` | 主菜单选项切换与场景切换 |
+| `Option.cs` | 主菜单选项切换与场景切换;按 Space 时根据 `choice` 把 `MenuOptions.isTwoPlayerMode` 写入再加载战斗场景 |
+| `MenuOptions.cs` | 静态类:在主菜单与战斗场景间共享单/双人模式 |
 
 ### 关键逻辑摘录
 
@@ -240,13 +243,139 @@ if (h != 0 && v != 0)
 
 ---
 
+## 🧠 AI 子系统详解
+
+### 整体决策链
+
+```
+Update 每帧(fireTimer 累积):
+  ├─ 攻击冷却到点 -> IsBreakableWallInFront() ? 开火 : 不开火
+  ├─ 每 2 秒同步难度(PlayerManager.currentLevel)
+  ├─ 若 HeartChaser:扫描周围 4 格玩家 → opportunisticKill
+  └─ 每 0.5 秒 Retarget(选目标 + TryClaim 锁定)
+
+FixedUpdate:
+  └─ MoveMethod: 撞砖墙 → PlanPath;撞铁墙 → PlanPath;走到当前节点 → 下一个
+
+PlanPath:
+  ├─ MapGrid.Rebuild
+  ├─ CollectNearbyEnemyBans(自己最近 5 格 + 周围 4 格队友当前位置)
+  ├─ FindPathPreferOpen (绕过 → 不行才破墙)
+  ├─ 若破墙路径 cost > maxWallCost(默认 1) → 拒绝
+  └─ 走 fallback(朝目标直线)
+```
+
+### 寻路:`MapGrid.FindPathPreferOpen` (DFS)
+
+- **第一轮**:不开砖墙,只走空地;`allowBreakable=false`
+- **第二轮**:找不到才允许破墙;`allowBreakable=true`
+- 用 `out usedBreakable` 通知调用方最终路径是否依赖破砖
+- `CountBreakableAlongPath` 进一步评估破墙代价
+
+### 协调:`EnemyCoordination` 静态锁定
+
+- `MaxLockOnHeart = 4`、`MaxLockOnPlayer = 2`
+- 同一个目标被锁满后,新敌人被迫换目标(打另一玩家)或降级为随机走
+- 避免"5 个敌人卡在玩家脸上围观"
+
+### 多敌人分散
+
+每个 enemy 跑 DFS 前 **ban 集**包含:
+1. **自己最近 5 个走过的格子**(`recentCells` 队列) — 避免来回跳头
+2. **周围 4 格队友的当前位置** — 避免走同一条路径
+
+由于每个 enemy 的 ban 集不同,DFS 自动选出独立路径,天然分散。
+
+### 角色化敌人
+
+- **HeartChaser**(默认 50%)— 一心冲 Heart,但**路上有玩家**时会"绕心刺人"临时切去打
+- **PlayerChaser**(默认 35%)— 优先追最近的玩家,被锁满则退而求 Heart
+- **RandomWalker**(默认 15%)— 自由晃荡,扰乱视线
+
+### 地图物体分类(DetectFront)
+
+| 前方物体 | tag / 名称 | 反应 |
+| --- | --- | --- |
+| **可碎砖墙** | tag = "Wall" | 开火打穿,同时让 PlanPath 重新规划绕路 |
+| **铁墙 / 边界空气墙** | tag = "Barrier" | 立刻 PlanPath 换路线 |
+| **河流** | GameObject.name == "River" | 同上(永久阻挡) |
+| **草地** | GameObject.name == "Grass" | 装饰,直接穿过 |
+| **Heart** | tag = "Heart" | 撞就结束游戏(Enemy 不主动撞) |
+| **队友坦克** | tag = "Enemy" | PlanPath 重绕 |
+
+### 轴对齐(axis-aligned)
+
+敌人**绝不斜走**:
+- `Awake` 显式 `h=0, v=-1`
+- `MoveMethod` 移动前加 `if (h != 0 && v != 0) v = 0;`
+- `if/else if` 互斥移动
+
+### 难度递增
+
+| 字段 | 默认 | 含义 |
+| --- | --- | --- |
+| `upgradeInterval` | 30 秒 | 多久升一级 |
+| `difficultyStep` | 0.10 / 级 | 每级 +10% 难度倍率 |
+| `maxDifficultyMultiplier` | 2.4 | 难度上限 |
+| 实际效果 | — | `moveSpeed` × 1.0~1.6,`fireCooldown` / 1.0~1.5,`opportunisticRadius` × 1.0~1.6 |
+
+### Inspector 调参
+
+| Enemy.prefab 字段 | 默认 | 含义 |
+| --- | --- | --- |
+| `fireCooldown` | 1.5 s | 攻击间隔 |
+| `detectRange` | 1.0 | 前方预判距离 |
+| `opportunisticRadius` | 3.0 | HeartChaser 路上遇玩家的范围 |
+| `heartChaserChance` | 0.5 | 心机者比例 |
+| `playerChaserShareInNonHearts` | 0.7 | 非心机者中追击者比例 |
+| `maxWallCost` | 1 | 一条路径允许破墙数量上限 |
+
+---
+
+## 👥 双人模式约定
+
+### 生命与分数共享
+
+| 资源 | 单人模式 | 双人模式 |
+| --- | --- | --- |
+| 生命值 | 6 命 | **同一份 6 命**(共享) |
+| 总分 | 0 | **同一份 0 分**(共享) |
+| 玩家初始位置 | (-2, -8) | P1=(-2,-8),P2=(2,-8) |
+| 失败条件 | lifeValue < 0 或 Heart 毁 | 同上,但**任一方还有命时游戏继续** |
+
+### 主菜单流程
+
+```
+Main.scene(主菜单,默认场景)
+  ├─ Option.cs 按 W/S 切换选项
+  └─ 按 Space:
+      ├─ choice == 1 (单人): MenuOptions.isTwoPlayerMode = false → LoadScene(1)
+      └─ choice == 2 (双人): MenuOptions.isTwoPlayerMode = true  → LoadScene(1)
+
+SampleScene(战斗)
+  └─ MapCreation.Awake 读 MenuOptions.isTwoPlayerMode 决定双/单
+```
+
+### 双人模式必做
+
+1. **复制 Player.prefab → Player 2.prefab**(在 Project 中右键 Duplicate)
+2. 双击 `Player 2.prefab`,把 SpriteRenderer 的 Sprite 改为 Player2.bmp 子 sprite
+3. 把 `Born.prefab` 的 `player2Prefab` 字段拖入 Player 2.prefab
+4. `MapCreation.twoPlayerMode = true`、`player2Prefab` 拖入 `Player 2.prefab`
+
+---
+
 ## 🔭 后续可扩展方向
 
-- [ ] **多关卡系统**:增加关卡选择与 BOSS 关卡
+- [ ] **多关卡系统**:每关卡独立的 `MapGrid` 与难度起步阈值
 - [ ] **道具系统**:补齐道具逻辑(无敌星、加速、炸雷、升级)
-- [ ] **多种敌方坦克类型**:高速型、重甲型、追踪导弹型
-- [ ] **更智能的 AI**:基于有限状态机 / 行为树
-- [ ] **存档与排行榜**:保存最高分
+- [ ] **多种敌方坦克类型**:BigEnemy / SmallEnemy 加差异化 (`MaxLockOnPlayer` 调整,FireCooldown 分级)
+- [ ] **真实 BFS 最优路径**:把 DFS 替成 BFS,获得真正最短绕路
+- [ ] **墙体 HP**:铁墙 HP=∞,砖墙 HP=1 — 让 AI 知道一击必破
+- [ ] **存档与排行榜**:PlayerPrefs 记录最高分/最远关卡
+- [ ] **关卡动画**:升 level 时屏幕闪"Lv UP!"提示
+- [ ] **Flocking Boids**:多 enemy 一起移动时显出"群"的自然感
+- [ ] **HeartChaser 围堵**:玩家用 1 面砖墙守,敌人在两侧 2 个卡位堵门 → 玩家被迫同时防多个角度
 - [ ] **完整音效 / BGM**:背景音乐与场景切换音乐
 - [ ] **重制美术资源**:以原版 16×16 像素贴图为蓝本的现代高清风或赛博风
 

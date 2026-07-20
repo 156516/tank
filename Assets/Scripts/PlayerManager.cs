@@ -88,11 +88,7 @@ public class PlayerManager : MonoBehaviour
         if (isDead) Recover();
 
         if (playerScoreText != null) playerScoreText.text = score.ToString();
-        if (playerLifeValueText != null)
-        {
-            // 把血条 + 关卡合并显示,省一个 UI Text
-            playerLifeValueText.text = "HP " + lifeValue + "   Lv " + currentLevel;
-        }
+        if (playerLifeValueText != null) playerLifeValueText.text = lifeValue.ToString();
     }
 
     // 供 Enemy 查询:基于当前关卡的难度倍率,范围 [1.0, maxDifficultyMultiplier]
